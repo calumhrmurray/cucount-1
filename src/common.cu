@@ -179,7 +179,7 @@ void copy_mesh_to_device(Mesh mesh, Mesh *device_mesh, int mode) {
             device_mesh->spin_values = NULL;
         }
 
-        if (mesh.cell_spin_sums != NULL) {
+        if (mesh.spin_values != NULL) {
             CUDA_CHECK(cudaMalloc((void **) &(device_mesh->cell_spin_sums), 2 * mesh.size * sizeof(FLOAT)));
             CUDA_CHECK(cudaMemcpy(device_mesh->cell_spin_sums, mesh.cell_spin_sums, 2 * mesh.size * sizeof(FLOAT), cudaMemcpyHostToDevice));
         } else {
