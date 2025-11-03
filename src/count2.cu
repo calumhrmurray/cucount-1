@@ -176,21 +176,15 @@ __device__ inline void compute_spin_projection(
 }
 
 typedef struct {
-    bool spin1_forward_valid;
-    bool spin1_reverse_valid;
-    bool spin2_forward_valid;
-    FLOAT cos_spin1_forward;
-    FLOAT sin_spin1_forward;
-    FLOAT cos_spin1_reverse;
-    FLOAT sin_spin1_reverse;
-    FLOAT cos_spin2_forward;
-    FLOAT sin_spin2_forward;
+    bool forward_valid;
+    bool reverse_valid;
+    FLOAT phi_forward;
+    FLOAT phi_reverse;
 } SpinPairCache;
 
 __device__ inline void init_spin_pair_cache(SpinPairCache *cache) {
-    cache->spin1_forward_valid = false;
-    cache->spin1_reverse_valid = false;
-    cache->spin2_forward_valid = false;
+    cache->forward_valid = false;
+    cache->reverse_valid = false;
 }
 
 __device__ inline void project_spin_with_angles(
@@ -253,28 +247,71 @@ __device__ inline void fill_spin_pair_cache(SpinPairCache *cache, int spin1, int
     cell_index_to_radec(cell_from, &ra_from, &dec_from);
     cell_index_to_radec(cell_to, &ra_to, &dec_to);
 
-    FLOAT phi_forward = compute_position_angle_from_sky_coords(ra_from, dec_from, ra_to, dec_to);
-    FLOAT phi_reverse = compute_position_angle_from_sky_coords(ra_to, dec_to, ra_from, dec_from);
+    cache->phi_forward = compute_position_angle_from_sky_coords(ra_from, dec_from, ra_to, dec_to);
+    cache->forward_valid = true;
+    cache->phi_reverse = compute_position_angle_from_sky_coords(ra_to, dec_to, ra_from, dec_from);
+    cache->reverse_valid = true;
+}
 
-    if (spin1 != 0) {
-        FLOAT cos_val = cos(spin1 * phi_forward);
-        FLOAT sin_val = sin(spin1 * phi_forward);
-        cache->cos_spin1_forward = cos_val;
-        cache->sin_spin1_forward = sin_val;
-        cache->spin1_forward_valid = true;
-
-        cos_val = cos(spin1 * phi_reverse);
-        sin_val = sin(spin1 * phi_reverse);
-        cache->cos_spin1_reverse = cos_val;
-        cache->sin_spin1_reverse = sin_val;
-        cache->spin1_reverse_valid = true;
+__device__ inline bool get_cached_spin_angles(const SpinPairCache *cache, int spin, bool use_forward,
+                                             FLOAT *cos_sphi, FLOAT *sin_sphi) {
+    if ((cache == NULL) || (spin == 0)) return false;
+    if (use_forward) {
+        if (!cache->forward_valid) return false;
+        FLOAT angle = spin * cache->phi_forward;
+        *cos_sphi = cos(angle);
+        *sin_sphi = sin(angle);
+        return true;
+    } else {
+        if (!cache->reverse_valid) return false;
+        FLOAT angle = spin * cache->phi_reverse;
+        *cos_sphi = cos(angle);
+        *sin_sphi = sin(angle);
+        return true;
     }
+}
 
-    if (spin2 != 0) {
-        cache->cos_spin2_forward = cos(spin2 * phi_forward);
-        cache->sin_spin2_forward = sin(spin2 * phi_forward);
-        cache->spin2_forward_valid = true;
+__device__ inline bool compute_cell_spin_components(const SpinPairCache *cache, int spin, bool use_forward,
+                                                    FLOAT sum_s1, FLOAT sum_s2,
+                                                    FLOAT *splus_sum, FLOAT *scross_sum) {
+    FLOAT cos_sphi, sin_sphi;
+    if (!get_cached_spin_angles(cache, spin, use_forward, &cos_sphi, &sin_sphi)) return false;
+    *splus_sum = -(sum_s1 * cos_sphi + sum_s2 * sin_sphi);
+    *scross_sum = sum_s1 * sin_sphi - sum_s2 * cos_sphi;
+    return true;
+}
+
+__device__ inline void radec_to_unit(FLOAT ra, FLOAT dec, FLOAT *vec) {
+    FLOAT cos_dec = cos(dec);
+    vec[0] = cos_dec * cos(ra);
+    vec[1] = cos_dec * sin(ra);
+    vec[2] = sin(dec);
+}
+
+__device__ inline void cell_index_to_unit_vector(int icell, FLOAT *vec) {
+    FLOAT ra, dec;
+    cell_index_to_radec(icell, &ra, &dec);
+    radec_to_unit(ra, dec, vec);
+}
+
+__device__ inline bool is_theta_only_binning(const BinAttrs battrs) {
+    if (battrs.ndim != 1) return false;
+    return (battrs.var[0] == VAR_THETA);
+}
+
+__device__ inline int theta_bin_index(FLOAT theta, const BinAttrs battrs) {
+    if (!is_theta_only_binning(battrs)) return -1;
+    int ibin = -1;
+    if (battrs.asize[0] > 0) {
+        if ((theta >= battrs.array[0][battrs.asize[0] - 1]) || (theta < battrs.array[0][0])) return -1;
+        for (ibin = battrs.asize[0] - 1; ibin >= 0; ibin--) {
+            if (theta >= battrs.array[0][ibin]) break;
+        }
+    } else {
+        ibin = (int) (floor((theta - battrs.min[0]) / battrs.step[0]));
     }
+    if ((ibin < 0) || (ibin >= battrs.shape[0])) return -1;
+    return ibin;
 }
 
 
@@ -452,14 +489,15 @@ __device__ inline void add_weight(FLOAT *counts, FLOAT *sposition1, FLOAT *sposi
             FLOAT splus1, scross1, splus2, scross2;
 
             // Project both tracers' spin_values
-            if (angle_cache && angle_cache->spin1_forward_valid) {
-                project_spin_with_angles(s1_1, s2_1, angle_cache->cos_spin1_forward, angle_cache->sin_spin1_forward, &splus1, &scross1);
+            FLOAT cos_sphi, sin_sphi;
+            if (get_cached_spin_angles(angle_cache, spin1, true, &cos_sphi, &sin_sphi)) {
+                project_spin_with_angles(s1_1, s2_1, cos_sphi, sin_sphi, &splus1, &scross1);
             } else {
                 compute_spin_projection(sky_coords1, sky_coords2, s1_1, s2_1, spin1, &splus1, &scross1);
             }
 
-            if (angle_cache && angle_cache->spin2_forward_valid) {
-                project_spin_with_angles(s1_2, s2_2, angle_cache->cos_spin2_forward, angle_cache->sin_spin2_forward, &splus2, &scross2);
+            if (get_cached_spin_angles(angle_cache, spin2, true, &cos_sphi, &sin_sphi)) {
+                project_spin_with_angles(s1_2, s2_2, cos_sphi, sin_sphi, &splus2, &scross2);
             } else {
                 compute_spin_projection(sky_coords1, sky_coords2, s1_2, s2_2, spin2, &splus2, &scross2);
             }
@@ -479,8 +517,9 @@ __device__ inline void add_weight(FLOAT *counts, FLOAT *sposition1, FLOAT *sposi
             FLOAT splus, scross;
 
             // Project second tracer's spin_values
-            if (angle_cache && angle_cache->spin2_forward_valid) {
-                project_spin_with_angles(s1_2, s2_2, angle_cache->cos_spin2_forward, angle_cache->sin_spin2_forward, &splus, &scross);
+            FLOAT cos_sphi, sin_sphi;
+            if (get_cached_spin_angles(angle_cache, spin2, true, &cos_sphi, &sin_sphi)) {
+                project_spin_with_angles(s1_2, s2_2, cos_sphi, sin_sphi, &splus, &scross);
             } else {
                 compute_spin_projection(sky_coords1, sky_coords2, s1_2, s2_2, spin2, &splus, &scross);
             }
@@ -496,8 +535,9 @@ __device__ inline void add_weight(FLOAT *counts, FLOAT *sposition1, FLOAT *sposi
             FLOAT splus, scross;
 
             // Project first tracer's spin_values (note reversed sky coordinates)
-            if (angle_cache && angle_cache->spin1_reverse_valid) {
-                project_spin_with_angles(s1_1, s2_1, angle_cache->cos_spin1_reverse, angle_cache->sin_spin1_reverse, &splus, &scross);
+            FLOAT cos_sphi, sin_sphi;
+            if (get_cached_spin_angles(angle_cache, spin1, false, &cos_sphi, &sin_sphi)) {
+                project_spin_with_angles(s1_1, s2_1, cos_sphi, sin_sphi, &splus, &scross);
             } else {
                 compute_spin_projection(sky_coords2, sky_coords1, s1_1, s2_1, spin1, &splus, &scross);
             }
@@ -558,9 +598,80 @@ __global__ void count2_angular_kernel(FLOAT *block_counts, Mesh mesh1, Mesh mesh
     // Global thread index
     size_t stride = gridDim.x * blockDim.x;
     size_t gid = tid + blockIdx.x * blockDim.x;
+
+    bool theta_only_mode = is_theta_only_binning(battrs) &&
+                           (mesh1.cell_weight_sums != NULL) &&
+                           (mesh2.cell_weight_sums != NULL) &&
+                           ((spin1 == 0) || (mesh1.cell_spin_sums != NULL)) &&
+                           ((spin2 == 0) || (mesh2.cell_spin_sums != NULL));
+
+    if (theta_only_mode) {
+        for (size_t cell1 = gid; cell1 < mesh1.size; cell1 += stride) {
+            FLOAT weight_sum1 = mesh1.cell_weight_sums[cell1];
+            if (weight_sum1 == 0.) continue;
+            FLOAT sposition1[NDIM];
+            cell_index_to_unit_vector(cell1, sposition1);
+            int bounds[2 * NDIM];
+            set_angular_bounds(sposition1, bounds);
+            for (int icth = bounds[0]; icth <= bounds[1]; icth++) {
+                int icth_n = icth * device_mattrs.meshsize[1];
+                for (int iphi = bounds[2]; iphi <= bounds[3]; iphi++) {
+                    int iphi_true = (iphi + device_mattrs.meshsize[1]) % device_mattrs.meshsize[1];
+                    int icell = iphi_true + icth_n;
+                    FLOAT weight_sum2 = mesh2.cell_weight_sums[icell];
+                    if (weight_sum2 == 0.) continue;
+
+                    FLOAT sposition2[NDIM];
+                    cell_index_to_unit_vector(icell, sposition2);
+                    if (!is_selected(sposition1, sposition2, sposition1, sposition2)) continue;
+                    FLOAT costheta = dot(sposition1, sposition2);
+                    costheta = CLIP(costheta, -1.0, 1.0);
+                    FLOAT theta = acos(costheta);
+                    int ibin = theta_bin_index(theta, battrs);
+                    if (ibin < 0) continue;
+
+                    if ((spin1 == 0) && (spin2 == 0)) {
+                        atomicAdd(&(local_counts[ibin]), weight_sum1 * weight_sum2);
+                        continue;
+                    }
+
+                    SpinPairCache angle_cache;
+                    const SpinPairCache *cache_ptr = NULL;
+                    fill_spin_pair_cache(&angle_cache, spin1, spin2, cell1, icell);
+                    cache_ptr = &angle_cache;
+
+                    FLOAT plus_sum1 = 0., cross_sum1 = 0.;
+                    FLOAT plus_sum2 = 0., cross_sum2 = 0.;
+
+                    FLOAT cell1_s1 = (mesh1.cell_spin_sums != NULL) ? mesh1.cell_spin_sums[2 * cell1] : 0.;
+                    FLOAT cell1_s2 = (mesh1.cell_spin_sums != NULL) ? mesh1.cell_spin_sums[2 * cell1 + 1] : 0.;
+                    FLOAT cell2_s1 = (mesh2.cell_spin_sums != NULL) ? mesh2.cell_spin_sums[2 * icell] : 0.;
+                    FLOAT cell2_s2 = (mesh2.cell_spin_sums != NULL) ? mesh2.cell_spin_sums[2 * icell + 1] : 0.;
+
+                    if (spin1 != 0 && !compute_cell_spin_components(cache_ptr, spin1, (spin2 != 0), cell1_s1, cell1_s2, &plus_sum1, &cross_sum1)) continue;
+                    if (spin2 != 0 && !compute_cell_spin_components(cache_ptr, spin2, true, cell2_s1, cell2_s2, &plus_sum2, &cross_sum2)) continue;
+
+                    if ((spin1 != 0) && (spin2 != 0)) {
+                        atomicAdd(&(local_counts[ibin]), plus_sum1 * plus_sum2);
+                        atomicAdd(&(local_counts[ibin + battrs.size]), cross_sum1 * plus_sum2);
+                        atomicAdd(&(local_counts[ibin + 2 * battrs.size]), cross_sum1 * cross_sum2);
+                    } else if (spin2 != 0) {
+                        atomicAdd(&(local_counts[ibin]), weight_sum1 * plus_sum2);
+                        atomicAdd(&(local_counts[ibin + battrs.size]), weight_sum1 * cross_sum2);
+                    } else if (spin1 != 0) {
+                        // spin2 == 0
+                        atomicAdd(&(local_counts[ibin]), weight_sum2 * plus_sum1);
+                        atomicAdd(&(local_counts[ibin + battrs.size]), weight_sum2 * cross_sum1);
+                    }
+                }
+            }
+        }
+        return;
+    }
+
     bool use_angle_cache = (spin1 != 0) || (spin2 != 0);
 
-    // Process particles
+    // Process particles (fallback path)
     for (size_t ii = gid; ii < mesh1.total_nparticles; ii += stride) {
         FLOAT *position1 = &(mesh1.positions[NDIM * ii]);
         FLOAT *sposition1 = &(mesh1.spositions[NDIM * ii]);

@@ -175,12 +175,13 @@ void set_mesh_attrs(const Particles *list_particles, MeshAttrs *mattrs, DeviceMe
 
         if (mattrs->meshsize[0] * mattrs->meshsize[1] == 0) {
             FLOAT theta_max = acos(mattrs->smax);
-            int nside1 = 5 * (int)(M_PI / theta_max);
-            int nside2 = MIN((int)(sqrt(0.25 * nparticles / fsky)), 2048);  // cap to avoid blowing up the memory
+            int nside1 = 20 * (int)(M_PI / theta_max);
+            int nside2 = MIN((int)(sqrt(0.25 * nparticles / fsky)), 4096);  // cap to avoid blowing up the memory, reduce for speed
             if ((buffer) && (buffer->size > 0)) nside2 = MIN(nside2, (int)(sqrt(0.5 * buffer->meshsize)));
             mattrs->meshsize[0] = (size_t) MAX(MIN(nside1, nside2), 1);
             mattrs->meshsize[1] = 2 * mattrs->meshsize[0];
         }
+
         mattrs->boxsize[0] = extent[1] - extent[0];
         mattrs->boxsize[1] = extent[3] - extent[2];
         mattrs->boxcenter[0] = (extent[0] + extent[1]) / 2.;
@@ -277,10 +278,21 @@ __global__ void fill_particles_kernel(const Particles particles, const size_t *i
         }
         mesh.weights[offset] = particles.weights[i];
 
+        if (mesh.cell_weight_sums != NULL) {
+            atomicAdd(&(mesh.cell_weight_sums[idx]), particles.weights[i]);
+        }
+
         // Copy spin values if present
         if (particles.spin_values != NULL && mesh.spin_values != NULL) {
             mesh.spin_values[2 * offset] = particles.spin_values[2 * i];         // e1 (or s1)
             mesh.spin_values[2 * offset + 1] = particles.spin_values[2 * i + 1]; // e2 (or s2)
+            if (mesh.cell_spin_sums != NULL) {
+                FLOAT weight = particles.weights[i];
+                FLOAT s1 = particles.spin_values[2 * i];
+                FLOAT s2 = particles.spin_values[2 * i + 1];
+                atomicAdd(&(mesh.cell_spin_sums[2 * idx]), weight * s1);
+                atomicAdd(&(mesh.cell_spin_sums[2 * idx + 1]), weight * s2);
+            }
         }
 
         // Copy sky coordinates if present
@@ -299,8 +311,10 @@ void set_mesh(const Particles *list_particles, Mesh *list_mesh, MeshAttrs mattrs
 
     for (size_t imesh=0; imesh<MAX_NMESH; imesh++) {
         const Particles particles = list_particles[imesh];
-        if (particles.size == 0) continue;
         Mesh &mesh = list_mesh[imesh];
+        mesh.cell_weight_sums = NULL;
+        mesh.cell_spin_sums = NULL;
+        if (particles.size == 0) continue;
         mesh.size = 1;
         for (size_t axis = 0; axis < NDIM; axis++) mesh.size *= mattrs.meshsize[axis];
         // Allocate memory for mesh variables
@@ -312,11 +326,16 @@ void set_mesh(const Particles *list_particles, Mesh *list_mesh, MeshAttrs mattrs
         mesh.positions = (FLOAT*) my_device_malloc(NDIM * particles.size * sizeof(FLOAT), buffer);
         mesh.spositions = (FLOAT*) my_device_malloc(NDIM * particles.size * sizeof(FLOAT), buffer);
         mesh.weights = (FLOAT*) my_device_malloc(particles.size * sizeof(FLOAT), buffer);
+        mesh.cell_weight_sums = (FLOAT*) my_device_malloc(mesh.size * sizeof(FLOAT), buffer);
+        CUDA_CHECK(cudaMemset(mesh.cell_weight_sums, 0, mesh.size * sizeof(FLOAT)));
         // Allocate spin fields if present in particles
         if (particles.spin_values != NULL) {
             mesh.spin_values = (FLOAT*) my_device_malloc(2 * particles.size * sizeof(FLOAT), buffer);
+            mesh.cell_spin_sums = (FLOAT*) my_device_malloc(2 * mesh.size * sizeof(FLOAT), buffer);
+            CUDA_CHECK(cudaMemset(mesh.cell_spin_sums, 0, 2 * mesh.size * sizeof(FLOAT)));
         } else {
             mesh.spin_values = NULL;
+            mesh.cell_spin_sums = NULL;
         }
         if (particles.sky_coords != NULL) {
             mesh.sky_coords = (FLOAT*) my_device_malloc(2 * particles.size * sizeof(FLOAT), buffer);

@@ -64,6 +64,8 @@ typedef struct {
     FLOAT *weights;
     FLOAT *spin_values;    // Spin components (s1, s2) per particle [size×2]
     FLOAT *sky_coords;     // RA, Dec per particle [size×2]
+    FLOAT *cell_weight_sums;  // Sum of weights per mesh cell
+    FLOAT *cell_spin_sums;    // Weighted spin sums (s1, s2) per cell [size×2]
 } Mesh;
 
 

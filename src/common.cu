@@ -150,6 +150,8 @@ void copy_mesh_to_device(Mesh mesh, Mesh *device_mesh, int mode) {
         device_mesh->weights = mesh.weights;
         device_mesh->spin_values = mesh.spin_values;
         device_mesh->sky_coords = mesh.sky_coords;
+        device_mesh->cell_weight_sums = mesh.cell_weight_sums;
+        device_mesh->cell_spin_sums = mesh.cell_spin_sums;
     }
     else {
         CUDA_CHECK(cudaMalloc((void **) &(device_mesh->nparticles), mesh.size * sizeof(size_t)));
@@ -167,11 +169,21 @@ void copy_mesh_to_device(Mesh mesh, Mesh *device_mesh, int mode) {
         CUDA_CHECK(cudaMalloc((void **) &(device_mesh->weights), mesh.total_nparticles * sizeof(FLOAT)));
         CUDA_CHECK(cudaMemcpy(device_mesh->weights, mesh.weights, mesh.total_nparticles * sizeof(FLOAT), cudaMemcpyHostToDevice));
 
+        CUDA_CHECK(cudaMalloc((void **) &(device_mesh->cell_weight_sums), mesh.size * sizeof(FLOAT)));
+        CUDA_CHECK(cudaMemcpy(device_mesh->cell_weight_sums, mesh.cell_weight_sums, mesh.size * sizeof(FLOAT), cudaMemcpyHostToDevice));
+
         if (mesh.spin_values != NULL) {
             CUDA_CHECK(cudaMalloc((void **) &(device_mesh->spin_values), 2 * mesh.total_nparticles * sizeof(FLOAT)));
             CUDA_CHECK(cudaMemcpy(device_mesh->spin_values, mesh.spin_values, 2 * mesh.total_nparticles * sizeof(FLOAT), cudaMemcpyHostToDevice));
         } else {
             device_mesh->spin_values = NULL;
+        }
+
+        if (mesh.cell_spin_sums != NULL) {
+            CUDA_CHECK(cudaMalloc((void **) &(device_mesh->cell_spin_sums), 2 * mesh.size * sizeof(FLOAT)));
+            CUDA_CHECK(cudaMemcpy(device_mesh->cell_spin_sums, mesh.cell_spin_sums, 2 * mesh.size * sizeof(FLOAT), cudaMemcpyHostToDevice));
+        } else {
+            device_mesh->cell_spin_sums = NULL;
         }
 
         if (mesh.sky_coords != NULL) {
@@ -199,6 +211,8 @@ void copy_mesh_to_host(Mesh mesh, Mesh *host_mesh, int mode) {
         host_mesh->weights = mesh.weights;
         host_mesh->spin_values = mesh.spin_values;
         host_mesh->sky_coords = mesh.sky_coords;
+        host_mesh->cell_weight_sums = mesh.cell_weight_sums;
+        host_mesh->cell_spin_sums = mesh.cell_spin_sums;
     }
     else {
         host_mesh->nparticles = (size_t*) my_malloc(mesh.size * sizeof(size_t));
@@ -216,11 +230,21 @@ void copy_mesh_to_host(Mesh mesh, Mesh *host_mesh, int mode) {
         host_mesh->weights = (FLOAT*) my_malloc(mesh.total_nparticles * sizeof(FLOAT));
         CUDA_CHECK(cudaMemcpy(host_mesh->weights, mesh.weights, mesh.total_nparticles * sizeof(FLOAT), cudaMemcpyDeviceToHost));
 
+        host_mesh->cell_weight_sums = (FLOAT*) my_malloc(mesh.size * sizeof(FLOAT));
+        CUDA_CHECK(cudaMemcpy(host_mesh->cell_weight_sums, mesh.cell_weight_sums, mesh.size * sizeof(FLOAT), cudaMemcpyDeviceToHost));
+
         if (mesh.spin_values != NULL) {
             host_mesh->spin_values = (FLOAT*) my_malloc(2 * mesh.total_nparticles * sizeof(FLOAT));
             CUDA_CHECK(cudaMemcpy(host_mesh->spin_values, mesh.spin_values, 2 * mesh.total_nparticles * sizeof(FLOAT), cudaMemcpyDeviceToHost));
         } else {
             host_mesh->spin_values = NULL;
+        }
+
+        if (mesh.cell_spin_sums != NULL) {
+            host_mesh->cell_spin_sums = (FLOAT*) my_malloc(2 * mesh.size * sizeof(FLOAT));
+            CUDA_CHECK(cudaMemcpy(host_mesh->cell_spin_sums, mesh.cell_spin_sums, 2 * mesh.size * sizeof(FLOAT), cudaMemcpyDeviceToHost));
+        } else {
+            host_mesh->cell_spin_sums = NULL;
         }
 
         if (mesh.sky_coords != NULL) {
@@ -252,8 +276,14 @@ void free_device_mesh(Mesh *mesh) {
     CUDA_CHECK(cudaFree(mesh->spositions));
     CUDA_CHECK(cudaFree(mesh->positions));
     CUDA_CHECK(cudaFree(mesh->weights));
+    if (mesh->cell_weight_sums != NULL) {
+        CUDA_CHECK(cudaFree(mesh->cell_weight_sums));
+    }
     if (mesh->spin_values != NULL) {
         CUDA_CHECK(cudaFree(mesh->spin_values));
+    }
+    if (mesh->cell_spin_sums != NULL) {
+        CUDA_CHECK(cudaFree(mesh->cell_spin_sums));
     }
     if (mesh->sky_coords != NULL) {
         CUDA_CHECK(cudaFree(mesh->sky_coords));
@@ -280,8 +310,14 @@ void free_host_mesh(Mesh *mesh) {
     free(mesh->spositions);
     free(mesh->positions);
     free(mesh->weights);
+    if (mesh->cell_weight_sums != NULL) {
+        free(mesh->cell_weight_sums);
+    }
     if (mesh->spin_values != NULL) {
         free(mesh->spin_values);
+    }
+    if (mesh->cell_spin_sums != NULL) {
+        free(mesh->cell_spin_sums);
     }
     if (mesh->sky_coords != NULL) {
         free(mesh->sky_coords);
