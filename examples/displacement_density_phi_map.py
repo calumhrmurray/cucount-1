@@ -11,7 +11,8 @@ plane, so positive and negative displacements remain distinct.
 
 Outputs:
 - a polar `(theta, phi)` correlation saved to NPZ
-- a Cartesian `(x, y)` projection aligned with the displacement direction
+- a Cartesian `(x, y)` projection with the positive displacement direction on
+  the +x axis (to the right)
 """
 
 from __future__ import annotations
@@ -127,6 +128,8 @@ def plot_xy_map(
     mean_cross: np.ndarray,
     output_path: Path,
 ) -> None:
+    # phi is defined relative to the positive displacement direction, so +x is
+    # "along +displacement" and points to the right in the rendered image.
     theta_grid, phi_grid = np.meshgrid(theta_edges, np.deg2rad(phi_edges), indexing='ij')
     x = theta_grid * np.cos(phi_grid)
     y = theta_grid * np.sin(phi_grid)
@@ -145,9 +148,9 @@ def plot_xy_map(
     axes[0].axhline(0.0, color='0.7', linewidth=1.0)
     axes[0].axvline(0.0, color='0.7', linewidth=1.0)
     axes[0].set_aspect('equal', adjustable='box')
-    axes[0].set_title('Density Correlation in Displacement-Aligned Frame')
-    axes[0].set_xlabel(r'$x_{\mathrm{north}} = \theta \cos \phi$ [deg]')
-    axes[0].set_ylabel(r'$y_{\mathrm{east}} = \theta \sin \phi$ [deg]')
+    axes[0].set_title('Density Correlation in Velocity-Aligned Frame')
+    axes[0].set_xlabel(r'$x_{+\mathrm{vel}} = \theta \cos \phi$ [deg]')
+    axes[0].set_ylabel(r'$y_{\perp} = \theta \sin \phi$ [deg]')
     fig.colorbar(pcm, ax=axes[0], label=r'$\xi(x, y)$')
 
     axes[1].pcolormesh(x, y, xi_density, shading='auto', cmap='Greys', alpha=0.35)
@@ -155,9 +158,9 @@ def plot_xy_map(
     axes[1].axhline(0.0, color='0.7', linewidth=1.0)
     axes[1].axvline(0.0, color='0.7', linewidth=1.0)
     axes[1].set_aspect('equal', adjustable='box')
-    axes[1].set_title('Mean Projected Displacement')
-    axes[1].set_xlabel(r'$x_{\mathrm{north}} = \theta \cos \phi$ [deg]')
-    axes[1].set_ylabel(r'$y_{\mathrm{east}} = \theta \sin \phi$ [deg]')
+    axes[1].set_title('Mean Projected Velocity')
+    axes[1].set_xlabel(r'$x_{+\mathrm{vel}} = \theta \cos \phi$ [deg]')
+    axes[1].set_ylabel(r'$y_{\perp} = \theta \sin \phi$ [deg]')
 
     fig.savefig(output_path, dpi=180)
     plt.close(fig)
