@@ -130,15 +130,13 @@ def compute_shape_maps(
     reference_particles,
     random_reference_particles_list,
     shape_particles,
-    shape_scalar_particles,
     battrs: BinAttrs,
     nthreads: int,
 ) -> tuple[np.ndarray, np.ndarray]:
     spin_wattrs = WeightAttrs(spin=(1, 2), reference_only=(True, False))
-    pair_wattrs = WeightAttrs(spin=(1, 0), reference_only=(True, False))
 
     ds_spin = count2(reference_particles, shape_particles, battrs=battrs, wattrs=spin_wattrs, nthreads=nthreads)
-    ds_pairs = count2(reference_particles, shape_scalar_particles, battrs=battrs, wattrs=pair_wattrs, nthreads=nthreads)['weight']
+    ds_pairs = ds_spin['weight']
     ds_plus = safe_divide(ds_spin['weight_plus'], ds_pairs)
     ds_cross = safe_divide(ds_spin['weight_cross'], ds_pairs)
 
@@ -146,7 +144,7 @@ def compute_shape_maps(
     rs_cross_sum = np.zeros_like(ds_cross, dtype=np.float64)
     for random_reference_particles in random_reference_particles_list:
         rs_spin = count2(random_reference_particles, shape_particles, battrs=battrs, wattrs=spin_wattrs, nthreads=nthreads)
-        rs_pairs = count2(random_reference_particles, shape_scalar_particles, battrs=battrs, wattrs=pair_wattrs, nthreads=nthreads)['weight']
+        rs_pairs = rs_spin['weight']
         rs_plus_sum += safe_divide(rs_spin['weight_plus'], rs_pairs)
         rs_cross_sum += safe_divide(rs_spin['weight_cross'], rs_pairs)
 
@@ -202,6 +200,7 @@ def make_shear_segments(
     phi_edges: np.ndarray,
     gamma_plus: np.ndarray,
     gamma_cross: np.ndarray,
+    normalize_lengths: bool = False,
 ) -> list[np.ndarray]:
     theta_centers = 0.5 * (theta_edges[:-1] + theta_edges[1:])
     phi_centers = 0.5 * (phi_edges[:-1] + phi_edges[1:])
@@ -223,12 +222,15 @@ def make_shear_segments(
     if not np.any(finite):
         return []
 
-    max_amplitude = float(np.nanmax(amplitude[finite]))
-    if max_amplitude <= 0.0:
-        return []
-
     angle = 0.5 * np.arctan2(gamma2, gamma1)
-    half_length = 0.03 * float(theta_edges[-1]) * amplitude / max_amplitude
+    if normalize_lengths:
+        # Show orientation only, with a fixed stick length across the field.
+        half_length = 0.03 * float(theta_edges[-1])
+    else:
+        max_amplitude = float(np.nanmax(amplitude[finite]))
+        if max_amplitude <= 0.0:
+            return []
+        half_length = 0.03 * float(theta_edges[-1]) * amplitude / max_amplitude
 
     x0 = x - half_length * np.cos(angle)
     x1 = x + half_length * np.cos(angle)
@@ -260,7 +262,13 @@ def plot_smoothed_maps_with_shear_field(
     theta_grid, phi_grid = np.meshgrid(theta_edges, np.deg2rad(phi_edges), indexing='ij')
     x = theta_grid * np.cos(phi_grid)
     y = theta_grid * np.sin(phi_grid)
-    segments = make_shear_segments(theta_edges, phi_edges, gamma_plus_smoothed, gamma_cross_smoothed)
+    segments = make_shear_segments(
+        theta_edges,
+        phi_edges,
+        gamma_plus_smoothed,
+        gamma_cross_smoothed,
+        normalize_lengths=True,
+    )
 
     figures = [
         (gamma_plus_smoothed, r'Smoothed $\gamma_+(x, y)$', r'$\gamma_+$'),
@@ -387,8 +395,6 @@ def main() -> None:
         spin_values=(unit_north, unit_east),
     )
     shape_particles = create_particles(shapes.ra, shapes.dec, shapes.weights, shear=(shapes.e1, shapes.e2))
-    shape_scalar_particles = create_particles(shapes.ra, shapes.dec, shapes.weights)
-
     random_paths = resolve_random_catalogs(args.randoms_glob, max_files=args.max_random_files)
     random_reference_particles_list = []
     for index, random_path in enumerate(random_paths, start=1):
@@ -403,7 +409,6 @@ def main() -> None:
         reference_particles,
         random_reference_particles_list,
         shape_particles,
-        shape_scalar_particles,
         battrs=battrs,
         nthreads=args.nthreads,
     )
