@@ -11,7 +11,8 @@ Catalog 2 provides the spin-2 shape field:
 
 The output maps are binned in (theta, phi), where phi is measured relative to
 the positive displacement direction. The rendered x axis therefore points along
-+displacement, to the right.
++displacement, to the right. Each run saves both the raw map and a Gaussian-
+smoothed view of the same signal.
 """
 
 from __future__ import annotations
@@ -36,6 +37,54 @@ from observed_catalog_tools import (
     resolve_random_catalogs,
     safe_divide,
 )
+
+
+def gaussian_kernel1d(sigma_bins: float, truncate: float = 3.0) -> np.ndarray:
+    if sigma_bins <= 0.0:
+        return np.array([1.0], dtype=np.float64)
+    radius = max(int(np.ceil(truncate * sigma_bins)), 1)
+    offsets = np.arange(-radius, radius + 1, dtype=np.float64)
+    kernel = np.exp(-0.5 * (offsets / sigma_bins) ** 2)
+    kernel /= np.sum(kernel)
+    return kernel
+
+
+def convolve_axis(values: np.ndarray, kernel: np.ndarray, axis: int, mode: str) -> np.ndarray:
+    if kernel.size == 1:
+        return np.asarray(values, dtype=np.float64).copy()
+
+    moved = np.moveaxis(np.asarray(values, dtype=np.float64), axis, 0)
+    pad = kernel.size // 2
+    pad_width = [(pad, pad)] + [(0, 0)] * (moved.ndim - 1)
+    if mode == 'wrap':
+        padded = np.pad(moved, pad_width, mode='wrap')
+    elif mode == 'reflect':
+        padded = np.pad(moved, pad_width, mode='reflect')
+    else:
+        raise ValueError(f'Unsupported convolution mode: {mode}')
+
+    finite = np.isfinite(padded)
+    filled = np.where(finite, padded, 0.0)
+    weights = finite.astype(np.float64)
+
+    convolved = np.empty_like(moved, dtype=np.float64)
+    for index in range(moved.shape[0]):
+        window = filled[index : index + kernel.size]
+        weight_window = weights[index : index + kernel.size]
+        numerator = np.tensordot(kernel, window, axes=(0, 0))
+        denominator = np.tensordot(kernel, weight_window, axes=(0, 0))
+        convolved[index] = np.divide(
+            numerator,
+            denominator,
+            out=np.zeros_like(numerator, dtype=np.float64),
+            where=denominator > 0.0,
+        )
+    return np.moveaxis(convolved, 0, axis)
+
+
+def gaussian_smooth_map(values: np.ndarray, sigma_theta_bins: float, sigma_phi_bins: float) -> np.ndarray:
+    smoothed = convolve_axis(values, gaussian_kernel1d(sigma_theta_bins), axis=0, mode='reflect')
+    return convolve_axis(smoothed, gaussian_kernel1d(sigma_phi_bins), axis=1, mode='wrap')
 
 
 def mask_nonzero_displacements(
@@ -170,6 +219,18 @@ def main() -> None:
     parser.add_argument('--max-shape-rows', type=int, default=None, help='Optional cap on shape-catalog rows.')
     parser.add_argument('--max-random-files', type=int, default=4, help='Optional cap on random files.')
     parser.add_argument('--max-random-rows', type=int, default=None, help='Optional cap on rows per random file.')
+    parser.add_argument(
+        '--smooth-sigma-theta-bins',
+        type=float,
+        default=1.0,
+        help='Gaussian smoothing sigma along theta, in units of theta bins.',
+    )
+    parser.add_argument(
+        '--smooth-sigma-phi-bins',
+        type=float,
+        default=1.0,
+        help='Gaussian smoothing sigma along phi, in units of phi bins.',
+    )
     parser.add_argument('--seed', type=int, default=1234, help='Seed for reproducible sub-sampling.')
     parser.add_argument('--nthreads', type=int, default=1, help='Number of GPUs for cucount to use.')
     parser.add_argument('--log-level', default='info', choices=['debug', 'info', 'warning', 'error'])
@@ -192,6 +253,7 @@ def main() -> None:
     print(f'Theta range       : [{args.min_theta:.3f}, {args.max_theta:.3f}] deg')
     print(f'Theta bins        : {args.theta_bins}')
     print(f'Phi bins          : {args.phi_bins}')
+    print(f'Smoothing sigma   : theta={args.smooth_sigma_theta_bins:.2f} bins, phi={args.smooth_sigma_phi_bins:.2f} bins')
     print('=' * 72)
 
     data, dalpha_cosdec_arcsec, ddec_arcsec = load_displacement_catalog(
@@ -240,6 +302,8 @@ def main() -> None:
         battrs=battrs,
         nthreads=args.nthreads,
     )
+    gamma_plus_smoothed = gaussian_smooth_map(gamma_plus, args.smooth_sigma_theta_bins, args.smooth_sigma_phi_bins)
+    gamma_cross_smoothed = gaussian_smooth_map(gamma_cross, args.smooth_sigma_theta_bins, args.smooth_sigma_phi_bins)
 
     results_path = output_dir / f'{args.output_prefix}_results.npz'
     np.savez(
@@ -248,15 +312,39 @@ def main() -> None:
         phi_edges=phi_edges,
         gamma_plus=gamma_plus,
         gamma_cross=gamma_cross,
+        gamma_plus_smoothed=gamma_plus_smoothed,
+        gamma_cross_smoothed=gamma_cross_smoothed,
+        smooth_sigma_theta_bins=args.smooth_sigma_theta_bins,
+        smooth_sigma_phi_bins=args.smooth_sigma_phi_bins,
     )
     print(f'Saved results to {results_path}')
 
     plus_path = output_dir / f'{args.output_prefix}_gamma_plus_xy.png'
     cross_path = output_dir / f'{args.output_prefix}_gamma_cross_xy.png'
+    plus_smoothed_path = output_dir / f'{args.output_prefix}_gamma_plus_xy_smoothed.png'
+    cross_smoothed_path = output_dir / f'{args.output_prefix}_gamma_cross_xy_smoothed.png'
     plot_single_map(theta_edges, phi_edges, gamma_plus, r'$\gamma_+(x, y)$', r'$\gamma_+$', plus_path)
     plot_single_map(theta_edges, phi_edges, gamma_cross, r'$\gamma_\times(x, y)$', r'$\gamma_\times$', cross_path)
+    plot_single_map(
+        theta_edges,
+        phi_edges,
+        gamma_plus_smoothed,
+        r'$\gamma_+(x, y)$ Gaussian-smoothed',
+        r'$\gamma_+$',
+        plus_smoothed_path,
+    )
+    plot_single_map(
+        theta_edges,
+        phi_edges,
+        gamma_cross_smoothed,
+        r'$\gamma_\times(x, y)$ Gaussian-smoothed',
+        r'$\gamma_\times$',
+        cross_smoothed_path,
+    )
     print(f'Saved gamma_+ map to {plus_path}')
     print(f'Saved gamma_x map to {cross_path}')
+    print(f'Saved smoothed gamma_+ map to {plus_smoothed_path}')
+    print(f'Saved smoothed gamma_x map to {cross_smoothed_path}')
 
 
 if __name__ == '__main__':
