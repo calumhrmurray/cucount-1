@@ -104,7 +104,7 @@ py::object count2_py(Particles_py& particles1, Particles_py& particles2,
 
     // number of counts and total size per-count
     char names[MAX_NWEIGHT][SIZE_NAME];
-    size_t ncounts = get_count2_size(p1_host.index_value, p2_host.index_value, names);
+    size_t ncounts = get_count2_size(p1_host.index_value, p2_host.index_value, wattrs, names);
     size_t csize = ncounts * battrs.size;
 
     // Host output (accumulated across GPUs)

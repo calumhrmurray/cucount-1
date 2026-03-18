@@ -18,70 +18,22 @@ Outputs:
 from __future__ import annotations
 
 import argparse
-import os
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
-from astropy.io import fits
 
 from cucount.numpy import BinAttrs, WeightAttrs, count2, setup_logging
 
 from observed_catalog_tools import (
     DEFAULT_DESI_RANDOMS_GLOB,
-    CatalogSample,
-    choose_rows,
+    DEFAULT_DISPLACEMENT_DATA,
     create_particles,
+    load_displacement_catalog,
+    load_desi_catalog,
     resolve_random_catalogs,
     safe_divide,
 )
-
-
-DEFAULT_DISPLACEMENT_DATA = os.environ.get('CUCOUNT_DISPLACEMENT_DATA')
-
-
-def load_displacement_catalog(
-    path: str,
-    max_rows: int | None = None,
-    seed: int = 0,
-    use_fkp: bool = True,
-) -> tuple[CatalogSample, np.ndarray, np.ndarray]:
-    with fits.open(path, memmap=True) as hdul:
-        data = hdul[1].data
-        indices = choose_rows(len(data), max_rows=max_rows, seed=seed)
-        row = slice(None) if indices is None else indices
-        ra = np.asarray(data['RA'][row], dtype=np.float64)
-        dec = np.asarray(data['DEC'][row], dtype=np.float64)
-        redshift = np.asarray(data['Z'][row], dtype=np.float64)
-        weights = np.asarray(data['WEIGHT'][row], dtype=np.float64)
-        if use_fkp and 'WEIGHT_FKP' in hdul[1].columns.names:
-            weights *= np.asarray(data['WEIGHT_FKP'][row], dtype=np.float64)
-        dra_arcsec = np.asarray(data['dRA'][row], dtype=np.float64)
-        ddec_arcsec = np.asarray(data['dDec'][row], dtype=np.float64)
-
-    mask = (
-        np.isfinite(ra)
-        & np.isfinite(dec)
-        & np.isfinite(redshift)
-        & np.isfinite(weights)
-        & np.isfinite(dra_arcsec)
-        & np.isfinite(ddec_arcsec)
-        & (redshift > 0.0)
-        & (weights > 0.0)
-    )
-    ra = ra[mask]
-    dec = dec[mask]
-    redshift = redshift[mask]
-    weights = weights[mask]
-    dra_arcsec = dra_arcsec[mask]
-    ddec_arcsec = ddec_arcsec[mask]
-
-    dalpha_cosdec_arcsec = dra_arcsec * np.cos(np.deg2rad(dec))
-    return (
-        CatalogSample(ra=ra, dec=dec, z=redshift, weights=weights),
-        dalpha_cosdec_arcsec,
-        ddec_arcsec,
-    )
 
 
 def normalized_density_correlation(
@@ -234,8 +186,6 @@ def main() -> None:
 
     random_paths = resolve_random_catalogs(args.randoms_glob, max_files=args.max_random_files)
     random_particles_list = []
-    from observed_catalog_tools import load_desi_catalog
-
     for index, random_path in enumerate(random_paths, start=1):
         randoms = load_desi_catalog(random_path, max_rows=args.max_random_rows, seed=args.seed + index)
         random_particles_list.append(create_particles(randoms.ra, randoms.dec, randoms.weights))

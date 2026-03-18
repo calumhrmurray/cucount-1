@@ -97,8 +97,9 @@ class BitwiseWeight(numpy.BitwiseWeight):
 @tree_util.register_pytree_node_class
 class WeightAttrs(numpy.WeightAttrs):
 
-    def __init__(self, spin=None, angular=None, bitwise=None):
+    def __init__(self, spin=None, reference_only=None, angular=None, bitwise=None):
         self.spin = spin
+        self.reference_only = reference_only
         self.angular = AngularWeight(**angular) if isinstance(angular, dict) else angular
         self.bitwise = BitwiseWeight(**bitwise) if isinstance(bitwise, dict) else bitwise
 

@@ -29,12 +29,12 @@ IndexValue get_index_value(int size_spin, int size_individual_weight, int size_b
     return index_value;
 }
 
-size_t get_count2_size(IndexValue index_value1, IndexValue index_value2,
+size_t get_count2_size(IndexValue index_value1, IndexValue index_value2, WeightAttrs wattrs,
                         char names[][SIZE_NAME])
 {
     // To check/modify when adding new weighting scheme
-    int s1 = (index_value1.size_spin > 0);
-    int s2 = (index_value2.size_spin > 0);
+    int s1 = (index_value1.size_spin > 0) && !wattrs.reference_only[0];
+    int s2 = (index_value2.size_spin > 0) && !wattrs.reference_only[1];
     size_t n = 1;
     if (s1 && s2) n = 4;
     else if (s1 ^ s2) n = 3;

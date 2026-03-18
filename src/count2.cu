@@ -495,24 +495,26 @@ __device__ inline void add_weight(FLOAT *counts, FLOAT *sposition1, FLOAT *sposi
 
     FLOAT weight[MAX_NWEIGHT];
     size_t wsize = 1;
-    FLOAT splus1, scross1, splus2, scross2;
-    if (index_value1.size_spin) compute_spin_projection_cartesian(sposition1, sposition2, &(value1[index_value1.start_spin]), wattrs.spin[0], &splus1, &scross1);
-    if (index_value2.size_spin) compute_spin_projection_cartesian(sposition1, sposition2, &(value2[index_value2.start_spin]), wattrs.spin[1], &splus2, &scross2);
+    FLOAT splus1 = 0., scross1 = 0., splus2 = 0., scross2 = 0.;
+    bool output_spin1 = (index_value1.size_spin > 0) && !wattrs.reference_only[0];
+    bool output_spin2 = (index_value2.size_spin > 0) && !wattrs.reference_only[1];
+    if (output_spin1) compute_spin_projection_cartesian(sposition1, sposition2, &(value1[index_value1.start_spin]), wattrs.spin[0], &splus1, &scross1);
+    if (output_spin2) compute_spin_projection_cartesian(sposition1, sposition2, &(value2[index_value2.start_spin]), wattrs.spin[1], &splus2, &scross2);
 
-    if (index_value1.size_spin && index_value2.size_spin) {
+    if (output_spin1 && output_spin2) {
         wsize = 4;
         weight[0] = pair_weight;
         weight[1] = pair_weight * splus1 * splus2;
         weight[2] = pair_weight * scross1 * splus2;
         weight[3] = pair_weight * scross1 * scross2;
     }
-    else if (index_value1.size_spin) {
+    else if (output_spin1) {
         wsize = 3;
         weight[0] = pair_weight;
         weight[1] = pair_weight * splus1;
         weight[2] = pair_weight * scross1;
     }
-    else if (index_value2.size_spin) {
+    else if (output_spin2) {
         wsize = 3;
         weight[0] = pair_weight;
         weight[1] = pair_weight * splus2;
@@ -700,7 +702,7 @@ void count2(FLOAT* counts, const Mesh *list_mesh, const MeshAttrs mattrs, const 
     float elapsed_time;
 
     // Determine output array size based on spin parameters
-    size_t csize = get_count2_size(list_mesh[0].index_value, list_mesh[1].index_value, NULL) * battrs.size;
+    size_t csize = get_count2_size(list_mesh[0].index_value, list_mesh[1].index_value, wattrs, NULL) * battrs.size;
 
     // Initialize histograms
     CUDA_CHECK(cudaMemset(counts, 0, csize * sizeof(FLOAT)));

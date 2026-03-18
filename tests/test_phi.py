@@ -140,3 +140,25 @@ def test_phi_binning_spin1_opposite_directions_are_distinct():
     assert np.allclose(counts_neg['weight_plus'], np.array([[0.0, 0.0, 1.0, 0.0]]), atol=1e-12)
     assert np.allclose(counts_pos['weight_cross'], 0.0, atol=1e-12)
     assert np.allclose(counts_neg['weight_cross'], 0.0, atol=1e-12)
+
+
+def test_phi_binning_reference_only_first_spin_with_second_spin_output():
+    from cucount.numpy import BinAttrs, WeightAttrs, count2
+
+    particles1 = make_particles([0.0], [0.0], [1.0], spin_angles_deg=[0.0], spin=1)
+    particles2 = make_particles([0.0], [1.0], [2.0], spin_angles_deg=[0.0], spin=2)
+    theta_edges = np.array([0.5, 2.0])
+    phi_edges = np.array([0.0, 90.0, 180.0, 270.0, 360.0])
+    wattrs = WeightAttrs(spin=(1, 2), reference_only=(True, False))
+
+    counts = count2(
+        particles1,
+        particles2,
+        battrs=BinAttrs(theta=theta_edges, phi=phi_edges),
+        wattrs=wattrs,
+    )
+
+    assert set(counts) == {'weight', 'weight_plus', 'weight_cross'}
+    assert np.allclose(counts['weight'], np.array([[2.0, 0.0, 0.0, 0.0]]), atol=1e-12)
+    assert np.allclose(counts['weight_plus'], np.array([[-2.0, 0.0, 0.0, 0.0]]), atol=1e-12)
+    assert np.allclose(counts['weight_cross'], 0.0, atol=1e-12)

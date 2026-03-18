@@ -91,7 +91,7 @@ void set_index_value_py(const size_t iparticle, const int size_spin = 0, const i
 
 std::vector<std::string> get_count2_names_py() {
     char names[MAX_NWEIGHT][SIZE_NAME];
-    size_t ncounts = get_count2_size(index_value[0], index_value[1], names);
+    size_t ncounts = get_count2_size(index_value[0], index_value[1], wattrs, names);
     std::vector<std::string> toret;
     for (size_t icount = 0; icount < ncounts; icount++) toret.push_back(names[icount]);
     return toret;

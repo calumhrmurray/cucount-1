@@ -142,4 +142,7 @@ docs/_build/
 docs/_autosummary/
 
 tests/output/
+examples/output/
 
+# CC-Lyon / runtime artifacts
+.venv-cc-lyon/

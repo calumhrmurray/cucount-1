@@ -347,6 +347,7 @@ struct SelectionAttrs_py {
 // Expose the WeightAttrs struct to Python
 struct WeightAttrs_py {
     std::vector<size_t> spin;
+    std::vector<bool> reference_only;
     // New members for 'bitwise' and 'angular' options
     FLOAT bitwise_default_value = 0.0;
     FLOAT bitwise_nrealizations = 0.0;
@@ -371,6 +372,16 @@ struct WeightAttrs_py {
                 }
                 else {
                     throw std::invalid_argument("Invalid type for 'spin' (expected iterable)");
+                }
+            }
+            else if (var_name == "reference_only") {
+                if (py::isinstance<py::iterable>(item.second)) {
+                    for (auto v : py::cast<py::iterable>(item.second)) {
+                        reference_only.push_back(py::cast<bool>(v));
+                    }
+                }
+                else {
+                    throw std::invalid_argument("Invalid type for 'reference_only' (expected iterable)");
                 }
             }
             else if (var_name == "angular") {
@@ -431,6 +442,8 @@ struct WeightAttrs_py {
         for (size_t i = 0; i < MAX_NMESH; i++) {
             wattrs.spin[i] = 0;
             if (i < spin.size()) wattrs.spin[i] = spin[i];
+            wattrs.reference_only[i] = false;
+            if (i < reference_only.size()) wattrs.reference_only[i] = reference_only[i];
         }
 
         // -- Angular weight --

@@ -13,6 +13,8 @@ from cucount.numpy import Particles
 DEFAULT_DESI_DATA = os.environ.get('CUCOUNT_DESI_DATA')
 DEFAULT_DESI_RANDOMS_GLOB = os.environ.get('CUCOUNT_DESI_RANDOMS_GLOB')
 DEFAULT_UNIONS_SOURCES = os.environ.get('CUCOUNT_UNIONS_SOURCES')
+DEFAULT_DISPLACEMENT_DATA = os.environ.get('CUCOUNT_DISPLACEMENT_DATA')
+DEFAULT_DESI_LRG_SHAPES = os.environ.get('CUCOUNT_DESI_LRG_SHAPES')
 
 DEFAULT_DESI_H = 0.6766
 DEFAULT_DESI_OMEGA_M = 0.3111
@@ -163,6 +165,50 @@ def load_desi_catalog(
         & (weights > 0.0)
     )
     return CatalogSample(ra=ra[mask], dec=dec[mask], z=redshift[mask], weights=weights[mask])
+
+
+def load_displacement_catalog(
+    path: str,
+    max_rows: int | None = None,
+    seed: int = 0,
+    use_fkp: bool = True,
+) -> tuple[CatalogSample, np.ndarray, np.ndarray]:
+    with fits.open(path, memmap=True) as hdul:
+        data = hdul[1].data
+        indices = choose_rows(len(data), max_rows=max_rows, seed=seed)
+        row = slice(None) if indices is None else indices
+        ra = np.asarray(data['RA'][row], dtype=np.float64)
+        dec = np.asarray(data['DEC'][row], dtype=np.float64)
+        redshift = np.asarray(data['Z'][row], dtype=np.float64)
+        weights = np.asarray(data['WEIGHT'][row], dtype=np.float64)
+        if use_fkp and 'WEIGHT_FKP' in hdul[1].columns.names:
+            weights *= np.asarray(data['WEIGHT_FKP'][row], dtype=np.float64)
+        dra_arcsec = np.asarray(data['dRA'][row], dtype=np.float64)
+        ddec_arcsec = np.asarray(data['dDec'][row], dtype=np.float64)
+
+    mask = (
+        np.isfinite(ra)
+        & np.isfinite(dec)
+        & np.isfinite(redshift)
+        & np.isfinite(weights)
+        & np.isfinite(dra_arcsec)
+        & np.isfinite(ddec_arcsec)
+        & (redshift > 0.0)
+        & (weights > 0.0)
+    )
+    ra = ra[mask]
+    dec = dec[mask]
+    redshift = redshift[mask]
+    weights = weights[mask]
+    dra_arcsec = dra_arcsec[mask]
+    ddec_arcsec = ddec_arcsec[mask]
+
+    dalpha_cosdec_arcsec = dra_arcsec * np.cos(np.deg2rad(dec))
+    return (
+        CatalogSample(ra=ra, dec=dec, z=redshift, weights=weights),
+        dalpha_cosdec_arcsec,
+        ddec_arcsec,
+    )
 
 
 def load_unions_catalog(

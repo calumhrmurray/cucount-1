@@ -163,17 +163,19 @@ class BitwiseWeight(object):
 class WeightAttrs(object):
 
     spin: tuple = None
+    reference_only: tuple = None
     angular: AngularWeight = None
     bitwise: BitwiseWeight = None
 
-    def __init__(self, spin=None, angular=None, bitwise=None):
+    def __init__(self, spin=None, reference_only=None, angular=None, bitwise=None):
         self.spin = spin
+        self.reference_only = reference_only
         self.angular = AngularWeight(**angular) if isinstance(angular, dict) else angular
         self.bitwise = BitwiseWeight(**bitwise) if isinstance(bitwise, dict) else bitwise
 
     def tree_flatten(self):
         children = (self.angular, self.bitwise)
-        aux_data = dict(spin=self.spin)
+        aux_data = dict(spin=self.spin, reference_only=self.reference_only)
         return children, aux_data
 
     @classmethod
@@ -187,7 +189,7 @@ class WeightAttrs(object):
             value = getattr(self, name)
             if value is not None:
                 state[name] = value._to_c()
-        for name in ['spin']:
+        for name in ['spin', 'reference_only']:
             value = getattr(self, name)
             if value is not None:
                 state[name] = value
@@ -200,10 +202,15 @@ class WeightAttrs(object):
             assert all(value.shape[0] == particle.size for value in particle.values), "All input value arrays should be of same length as positions"
             assert len(particle.index_value('individual_weight', return_type=list)) <= 1, "Only one individual weight is supported"
             assert len(particle.index_value('negative_weight', return_type=list)) <= 1, "Only one negative weight is supported"
+        reference_only = self.reference_only
+        if reference_only is None:
+            reference_only = (False,) * len(particles)
         if self.spin is not None:
             assert len(self.spin) == len(particles), "Provide as many WeightAttrs.spin as Particles catalogs"
+            assert len(reference_only) == len(particles), "Provide as many WeightAttrs.reference_only flags as Particles catalogs"
             assert all(bool(particle.get('spin')) == bool(spin) for spin, particle in zip(self.spin, particles)), "Provide spin_values whenever WeightAttrs.spin != 0"
             assert all((spin == 0) or (len(particle.get('spin')) == 2) for spin, particle in zip(self.spin, particles)), "Spin fields currently require exactly two components per particle"
+            assert all((not ref_only) or (spin != 0) for spin, ref_only in zip(self.spin, reference_only)), "WeightAttrs.reference_only requires a non-zero corresponding WeightAttrs.spin"
         nbitwises = [len(particle.get('bitwise_weight')) for particle in particles]
         if any(nbitwises):
             assert self.bitwise is not None, 'Particles have bitwise weights, so provide bitwise to WeightAttrs'
