@@ -107,13 +107,6 @@ def compute_xi_spin_spin(
     return xi_plus_plus, xi_plus_cross, xi_cross_cross
 
 
-def set_symlog(axis, values: np.ndarray, floor: float = 1e-9) -> None:
-    finite = np.asarray(values)[np.isfinite(values)]
-    nonzero = np.abs(finite[np.abs(finite) > 0])
-    linthresh = max(np.min(nonzero) * 0.8, floor) if nonzero.size else floor
-    axis.set_yscale('symlog', linthresh=linthresh)
-
-
 def plot_results(
     theta_centers: np.ndarray,
     results: dict[str, np.ndarray],
@@ -129,7 +122,6 @@ def plot_results(
             axis.plot(theta_centers, results['xi_gg'], color='C3', marker='o', linewidth=1.8, markersize=4, label=r'$\xi_{gg}$')
             axis.axhline(0.0, color='0.7', linewidth=1.0, linestyle='--')
             axis.set_xscale('log')
-            set_symlog(axis, results['xi_gg'])
             axis.set_title('DESI LRG Angular Clustering')
             axis.set_xlabel(r'$\theta$ [deg]')
             axis.set_ylabel(r'$\xi_{gg}(\theta)$')
@@ -140,7 +132,6 @@ def plot_results(
             axis.plot(theta_centers, results['xi_g_cross'], color='C1', marker='s', linewidth=1.5, markersize=4, label=r'$\xi_{g\times}$')
             axis.axhline(0.0, color='0.7', linewidth=1.0, linestyle='--')
             axis.set_xscale('log')
-            set_symlog(axis, np.concatenate([results['xi_g_plus'], results['xi_g_cross']]))
             axis.set_title('DESI x UNIONS Galaxy-Shear')
             axis.set_xlabel(r'$\theta$ [deg]')
             axis.set_ylabel(r'$\xi_{g\pm}(\theta)$')
@@ -152,10 +143,6 @@ def plot_results(
             axis.plot(theta_centers, results['xi_cross_cross'], color='C5', marker='^', linewidth=1.5, markersize=4, label=r'$\xi_{\times\times}$')
             axis.axhline(0.0, color='0.7', linewidth=1.0, linestyle='--')
             axis.set_xscale('log')
-            set_symlog(
-                axis,
-                np.concatenate([results['xi_plus_plus'], results['xi_plus_cross'], results['xi_cross_cross']]),
-            )
             axis.set_title('UNIONS Shape Auto-Correlations')
             axis.set_xlabel(r'$\theta$ [deg]')
             axis.set_ylabel(r'$\xi(\theta)$')
