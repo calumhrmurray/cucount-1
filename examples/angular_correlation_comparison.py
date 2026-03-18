@@ -1,598 +1,272 @@
 #!/usr/bin/env python3
 """
-Angular correlation comparison for w_gg, galaxy-shear, and cosmic shear with optional TreeCorr validation.
+Measure observed-sky angular correlations for DESI LRG lenses and UNIONS shapes.
 
-Measures:
-- ξ_gg(θ): Galaxy-galaxy angular correlations using DESI LRG
-- ξ_g+(θ), ξ_gx(θ): Galaxy-shape correlations (galaxy-galaxy lensing)
-- ξ_++(θ), ξ_+x(θ), ξ_××(θ): Shape-shape correlations (cosmic shear)
-
-Data:
-- Lenses: DESI LRG catalog
-- Sources: UNIONS shape catalog
-
-Usage:
-    # Run all correlations with TreeCorr comparison
-    python angular_correlation_comparison.py
-
-    # Run only galaxy-galaxy clustering (cucount only, no TreeCorr)
-    python angular_correlation_comparison.py --correlations gg --no-treecorr
-
-    # Run galaxy-shear with custom angular bins
-    python angular_correlation_comparison.py --correlations gs --no-treecorr --min-theta 0.02 --max-theta 2.0 --nbins 15
-
-    # Subsample catalogs for testing
-    python angular_correlation_comparison.py --max-lenses 10000 --max-sources 50000
-
-    # Use full UNIONS catalog (slower)
-    python angular_correlation_comparison.py --use-full-sources
+Outputs:
+- xi_gg(theta) for DESI LRG using DESI random catalogs
+- xi_g+(theta) and xi_gx(theta) for DESI x UNIONS
+- xi_++(theta), xi_+x(theta), and xi_xx(theta) for UNIONS shape auto-correlations
 """
 
-import os
+from __future__ import annotations
+
 import argparse
+from pathlib import Path
 import time
-import numpy as np
+
 import matplotlib.pyplot as plt
-from astropy.io import fits
-from cucount.numpy import count2, Particles, BinAttrs
-
-# Try to import TreeCorr (optional)
-try:
-    import treecorr
-    TREECORR_AVAILABLE = True
-except ImportError:
-    TREECORR_AVAILABLE = False
-    print("Warning: TreeCorr not available. Running cucount only mode.")
-
-# Output directory
-OUTPUT_DIR = os.path.join(os.path.dirname(__file__), 'output')
-
-# Default paths
-DESI_DATA = '/sps/euclid/Users/cmurray/DESI/catalogs/LRG_NGC_clustering.dat.fits'
-DESI_RAND = '/sps/euclid/Users/cmurray/DESI/catalogs/LRG_NGC_0_clustering.ran.fits'
-UNIONS_DATA = '/sps/euclid/Users/cmurray/UNIONS/unions_shapepipe_2024_v1.4.1_downsample.fits'
-UNIONS_DATA_FULL = '/sps/euclid/Users/cmurray/UNIONS/unions_shapepipe_2024_v1.4.1.fits'
-
-# Angular bins
-MIN_THETA = 0.01  # degrees
-MAX_THETA = 1.0
-NBINS = 20
-
-
-def load_desi_catalog(path):
-    """Load DESI LRG catalog"""
-    with fits.open(path) as hdul:
-        data = hdul[1].data
-        ra = data['RA']
-        dec = data['DEC']
-        weights = data['WEIGHT'] * data['WEIGHT_FKP']
-    print(f"  Loaded {len(ra)} objects from {os.path.basename(path)}")
-    return ra, dec, weights
-
-
-def load_unions_catalog(path, max_sources=None):
-    """Load UNIONS shape catalog with optional subsampling"""
-    with fits.open(path, memmap=True) as hdul:
-        data = hdul[1].data
-        total_sources = len(data)
-
-        # Subsample during loading if requested
-        if max_sources is not None and total_sources > max_sources:
-            idx = np.random.choice(total_sources, max_sources, replace=False)
-            idx.sort()  # Sort indices for faster disk access
-            print(f"  Subsampling {max_sources} from {total_sources:,} sources...")
-
-            # Load only the needed columns for subsampled indices
-            ra = np.array(data['RA'][idx])
-            dec = np.array(data['Dec'][idx])
-            e1 = np.array(data['e1'][idx])
-            e2 = np.array(data['e2'][idx])
-            weights = np.array(data['w'][idx])
-        else:
-            # Load all data
-            ra = np.array(data['RA'])
-            dec = np.array(data['Dec'])
-            e1 = np.array(data['e1'])
-            e2 = np.array(data['e2'])
-            weights = np.array(data['w'])
-
-    print(f"  Loaded {len(ra):,} source galaxies from {path.split('/')[-1]}")
-    print(f"  e1 range: [{e1.min():.3f}, {e1.max():.3f}]")
-    print(f"  e2 range: [{e2.min():.3f}, {e2.max():.3f}]")
-    return ra, dec, weights, e1, e2
-
-
-def get_cartesian(ra, dec):
-    """Convert RA/Dec to unit sphere Cartesian coordinates"""
-    conv = np.pi / 180.
-    theta, phi = dec * conv, ra * conv
-    x = np.cos(theta) * np.cos(phi)
-    y = np.cos(theta) * np.sin(phi)
-    z = np.sin(theta)
-    return np.column_stack([x, y, z])
-
-
-def create_particles(ra, dec, weights, ellipticities=None):
-    """Create cucount Particles object from sky coordinates
-
-    Parameters
-    ----------
-    ra : array
-        Right ascension in degrees
-    dec : array
-        Declination in degrees
-    weights : array
-        Particle weights
-    ellipticities : array, optional
-        Ellipticity components (e1, e2) as [N, 2] array
-
-    Returns
-    -------
-    Particles
-        cucount Particles object
-    """
-    # Convert to 3D unit sphere Cartesian coordinates
-    positions = get_cartesian(ra, dec)
-
-    # Sky coordinates for spin projections (RA, Dec in radians)
-    sky_coords = np.column_stack([ra * np.pi/180, dec * np.pi/180])
-
-    if ellipticities is not None:
-        # Create particles with sky coordinates and spin values (for spin-2 fields)
-        return Particles(positions, weights, sky_coords, ellipticities)
-    else:
-        # Create particles with sky coordinates only (for spin-0 fields)
-        return Particles(positions, weights, sky_coords)
-
-
-def compute_wgg_cucount(lenses, randoms, theta_edges_rad):
-    """Compute w_gg using cucount with Landy-Szalay estimator"""
-
-    t0 = time.time()
-
-    battrs = BinAttrs(theta=theta_edges_rad)
-    # Compute pair counts (no spin)
-    print("  Computing DD...")
-    DD = count2(lenses, lenses, battrs=battrs)
-    print("  Computing DR...")
-    DR = count2(lenses, randoms, battrs=battrs)
-    print("  Computing RR...")
-    RR = count2(randoms, randoms, battrs=battrs)
-    # Normalization
-    DD_norm = np.sum(lenses.weights)**2 - np.sum(lenses.weights**2)
-    DR_norm = np.sum(lenses.weights) * np.sum(randoms.weights)
-    RR_norm = np.sum(randoms.weights)**2 - np.sum(randoms.weights**2)
-
-    # Landy-Szalay estimator
-    xi = ((DD / DD_norm) - 2 * (DR / DR_norm) + (RR / RR_norm)) / (RR / RR_norm)
-
-    elapsed = time.time() - t0
-    return xi, elapsed
-
-
-def compute_wg_cucount(lenses, sources, randoms, theta_edges_rad):
-    """Compute galaxy-shear correlations using cucount"""
-
-    t0 = time.time()
-
-    battrs = BinAttrs(theta=theta_edges_rad)
-
-    # Position-shape correlations
-    print("  Computing PS...")
-    PS_result = count2(lenses, sources, battrs=battrs, spin1=0, spin2=2)
-    PS_eplus = PS_result['plus']
-    PS_ecross = PS_result['cross']
-
-    # Random-shape correlations
-    print("  Computing RS...")
-    RS_result = count2(randoms, sources, battrs=battrs, spin1=0, spin2=2)
-    RS_eplus = RS_result['plus']
-    RS_ecross = RS_result['cross']
-
-    # Regular pair counts for normalization
-    print("  Computing pair counts...")
-    PS_count = count2(lenses, sources, battrs=battrs, spin1=0, spin2=0)
-    RS_count = count2(randoms, sources, battrs=battrs, spin1=0, spin2=0)
-
-    # Galaxy-galaxy lensing estimator
-    gamma_t = np.where(RS_count > 0, (PS_eplus / PS_count - RS_eplus / RS_count), 0)
-    gamma_x = np.where(RS_count > 0, (PS_ecross / PS_count - RS_ecross / RS_count), 0)
-
-    elapsed = time.time() - t0
-    return gamma_t, gamma_x, elapsed
-
-
-def compute_wss_cucount(sources, theta_edges_rad):
-    """Compute shape-shape correlations using cucount"""
-
-    t0 = time.time()
-
-    battrs = BinAttrs(theta=theta_edges_rad)
-
-    # Shape-shape correlation
-    print("  Computing SS...")
-    xi_ss = count2(sources, sources, battrs=battrs, spin1=2, spin2=2)
-
-    # Get normalizing pair counts
-    print("  Computing pair counts...")
-    SS_counts = count2(sources, sources, battrs=battrs, spin1=0, spin2=0)
-
-    # Normalize by pair counts
-    xi_plus_plus = np.where(SS_counts > 0, xi_ss['plus_plus'] / SS_counts, 0)
-    xi_cross_plus = np.where(SS_counts > 0, xi_ss['cross_plus'] / SS_counts, 0)
-    xi_cross_cross = np.where(SS_counts > 0, xi_ss['cross_cross'] / SS_counts, 0)
-
-    elapsed = time.time() - t0
-    return xi_plus_plus, xi_cross_plus, xi_cross_cross, elapsed
-
-
-def compute_correlations_treecorr(lenses_data, sources_data, randoms_data, theta_edges_deg, correlations, bin_slop=0.01, metric='Euclidean'):
-    """Compute correlations using TreeCorr for comparison
-
-    Parameters
-    ----------
-    metric : str
-        Distance metric for TreeCorr ('Euclidean' or 'Arc')
-    """
-
-    if not TREECORR_AVAILABLE:
-        raise ImportError("TreeCorr is not available")
-
-    # Convert theta edges to arcmin for TreeCorr
-    min_sep = theta_edges_deg[0] * 60.0
-    max_sep = theta_edges_deg[-1] * 60.0
-    nbins = len(theta_edges_deg) - 1
-
-    results = {}
-    timings = {}
-
-    if 'gg' in correlations:
-        print("  TreeCorr: Computing ξ_gg...")
-        t0 = time.time()
-
-        lens_cat = treecorr.Catalog(ra=lenses_data['ra'], dec=lenses_data['dec'],
-                                    w=lenses_data['weights'], ra_units='deg', dec_units='deg')
-        rand_cat = treecorr.Catalog(ra=randoms_data['ra'], dec=randoms_data['dec'],
-                                    w=randoms_data['weights'], ra_units='deg', dec_units='deg')
-
-        dd = treecorr.NNCorrelation(min_sep=min_sep, max_sep=max_sep, nbins=nbins,
-                                    sep_units='arcmin', bin_type='Log', bin_slop=bin_slop, metric=metric)
-        dd.process(lens_cat)
-
-        rr = treecorr.NNCorrelation(min_sep=min_sep, max_sep=max_sep, nbins=nbins,
-                                    sep_units='arcmin', bin_type='Log', bin_slop=bin_slop, metric=metric)
-        rr.process(rand_cat)
-
-        dr = treecorr.NNCorrelation(min_sep=min_sep, max_sep=max_sep, nbins=nbins,
-                                    sep_units='arcmin', bin_type='Log', bin_slop=bin_slop, metric=metric)
-        dr.process(lens_cat, rand_cat)
-
-        xi, _ = dd.calculateXi(rr=rr, dr=dr)
-        results['treecorr_xi_gg'] = xi
-        timings['gg'] = time.time() - t0
-
-    if 'gs' in correlations and sources_data is not None:
-        print("  TreeCorr: Computing γ_t, γ_×...")
-        t0 = time.time()
-
-        lens_cat = treecorr.Catalog(ra=lenses_data['ra'], dec=lenses_data['dec'],
-                                    w=lenses_data['weights'], ra_units='deg', dec_units='deg')
-        source_cat = treecorr.Catalog(ra=sources_data['ra'], dec=sources_data['dec'],
-                                      w=sources_data['weights'], g1=sources_data['e1'], g2=sources_data['e2'],
-                                      ra_units='deg', dec_units='deg')
-        rand_cat = treecorr.Catalog(ra=randoms_data['ra'], dec=randoms_data['dec'],
-                                    w=randoms_data['weights'], ra_units='deg', dec_units='deg')
-
-        ng = treecorr.NGCorrelation(min_sep=min_sep, max_sep=max_sep, nbins=nbins,
-                                    sep_units='arcmin', bin_type='Log', bin_slop=bin_slop, metric=metric)
-        ng.process(lens_cat, source_cat)
-
-        rg = treecorr.NGCorrelation(min_sep=min_sep, max_sep=max_sep, nbins=nbins,
-                                    sep_units='arcmin', bin_type='Log', bin_slop=bin_slop, metric=metric)
-        rg.process(rand_cat, source_cat)
-
-        gamma_t, gamma_x, _ = ng.calculateXi(rg=rg)
-        results['treecorr_xi_g_plus'] = gamma_t
-        results['treecorr_xi_g_cross'] = gamma_x
-        timings['gs'] = time.time() - t0
-
-    if 'ss' in correlations and sources_data is not None:
-        print("  TreeCorr: Computing ξ_++, ξ_××...")
-        t0 = time.time()
-
-        source_cat = treecorr.Catalog(ra=sources_data['ra'], dec=sources_data['dec'],
-                                      w=sources_data['weights'], g1=sources_data['e1'], g2=sources_data['e2'],
-                                      ra_units='deg', dec_units='deg')
-
-        gg = treecorr.GGCorrelation(min_sep=min_sep, max_sep=max_sep, nbins=nbins,
-                                    sep_units='arcmin', bin_type='Log', bin_slop=bin_slop, metric=metric)
-        gg.process(source_cat)
-
-        # Convert ξ_+, ξ_- to ξ_++, ξ_××
-        results['treecorr_xi_plus_plus'] = (gg.xip + gg.xim) / 2.0
-        results['treecorr_xi_cross_cross'] = (gg.xip - gg.xim) / 2.0
-        timings['ss'] = time.time() - t0
-
-    return results, timings
-
-
-def print_timing_table(cucount_timings, treecorr_timings=None):
-    """Print a formatted timing comparison table"""
-
-    print("\n" + "=" * 60)
-    print("Performance Comparison")
-    print("=" * 60)
-
-    # Header
-    if treecorr_timings:
-        print(f"{'Correlation':<15} {'cucount (s)':<15} {'TreeCorr (s)':<15} {'Speedup':<10}")
-        print("-" * 60)
-    else:
-        print(f"{'Correlation':<15} {'cucount (s)':<15}")
-        print("-" * 30)
-
-    # Row labels
-    corr_labels = {
-        'gg': 'ξ_gg',
-        'gs': 'γ_t, γ_×',
-        'ss': 'ξ_++, ξ_××'
-    }
-
-    # Print each correlation type
-    for corr_type in ['gg', 'gs', 'ss']:
-        if corr_type in cucount_timings:
-            cucount_time = cucount_timings[corr_type]
-            label = corr_labels[corr_type]
-
-            if treecorr_timings and corr_type in treecorr_timings:
-                treecorr_time = treecorr_timings[corr_type]
-                speedup = treecorr_time / cucount_time if cucount_time > 0 else 0
-                print(f"{label:<15} {cucount_time:>10.3f}     {treecorr_time:>10.3f}     {speedup:>6.1f}×")
-            else:
-                print(f"{label:<15} {cucount_time:>10.3f}")
-
-    print("=" * 60)
-
-
-def plot_correlations(results, theta_centers, correlations, output_prefix='correlation'):
-    """Plot all correlation functions"""
-
-    n_plots = len(correlations)
-    fig, axes = plt.subplots(1, n_plots, figsize=(6*n_plots, 5))
-    if n_plots == 1:
-        axes = [axes]
-
-    idx = 0
-
-    # Plot w_gg
-    if 'gg' in correlations:
-        ax = axes[idx]
-        if 'xi_gg' in results:
-            ax.loglog(theta_centers, results['xi_gg'], 'b-', marker='o',
-                     label='cucount', markersize=6, linewidth=2)
-        if 'treecorr_xi_gg' in results:
-            ax.loglog(theta_centers, results['treecorr_xi_gg'], 'r--', marker='s',
-                     label='TreeCorr', markersize=4, linewidth=2)
-        ax.set_xlabel('θ [degrees]', fontsize=12)
-        ax.set_ylabel('ξ_gg(θ)', fontsize=12)
-        ax.set_title('Galaxy-Galaxy Clustering', fontsize=13)
-        ax.grid(True, alpha=0.3)
-        ax.legend(fontsize=11)
-        idx += 1
-
-    # Plot galaxy-shear
-    if 'gs' in correlations:
-        ax = axes[idx]
-        if 'xi_g_plus' in results:
-            ax.loglog(theta_centers, results['xi_g_plus'], 'b-', marker='o',
-                     label='cucount γ_t', markersize=5, linewidth=2)
-            ax.loglog(theta_centers, results['xi_g_cross'], 'b--', marker='s',
-                     label='cucount γ_×', markersize=4, linewidth=2)
-        if 'treecorr_xi_g_plus' in results:
-            ax.loglog(theta_centers, results['treecorr_xi_g_plus'], 'r-', marker='o',
-                     label='TreeCorr γ_t', markersize=4, linewidth=1.5, alpha=0.7)
-            ax.loglog(theta_centers, results['treecorr_xi_g_cross'], 'r--', marker='s',
-                     label='TreeCorr γ_×', markersize=3, linewidth=1.5, alpha=0.7)
-        ax.set_xlabel('θ [degrees]', fontsize=12)
-        ax.set_ylabel('γ_t(θ), γ_×(θ)', fontsize=12)
-        ax.set_title('Galaxy-Shear (GGL)', fontsize=13)
-        ax.grid(True, alpha=0.3)
-        ax.legend(fontsize=10)
-        idx += 1
-
-    # Plot shape-shape
-    if 'ss' in correlations:
-        ax = axes[idx]
-        if 'xi_plus_plus' in results:
-            ax.loglog(theta_centers, results['xi_plus_plus'], 'b-', marker='o',
-                     label='cucount ξ_++', markersize=5, linewidth=2)
-            ax.loglog(theta_centers, results['xi_cross_plus'], 'b--', marker='s',
-                     label='cucount ξ_+×', markersize=4, linewidth=2)
-            ax.loglog(theta_centers, results['xi_cross_cross'], 'b:', marker='^',
-                     label='cucount ξ_××', markersize=4, linewidth=2)
-        if 'treecorr_xi_plus_plus' in results:
-            ax.loglog(theta_centers, results['treecorr_xi_plus_plus'], 'r-', marker='o',
-                     label='TreeCorr ξ_++', markersize=4, linewidth=1.5, alpha=0.7)
-            ax.loglog(theta_centers, results['treecorr_xi_cross_cross'], 'r:', marker='^',
-                     label='TreeCorr ξ_××', markersize=3, linewidth=1.5, alpha=0.7)
-        ax.set_xlabel('θ [degrees]', fontsize=12)
-        ax.set_ylabel('ξ(θ)', fontsize=12)
-        ax.set_title('Shape-Shape (Cosmic Shear)', fontsize=13)
-        ax.grid(True, alpha=0.3)
-        ax.legend(fontsize=9)
-
-    plt.tight_layout()
-    outfile = os.path.join(OUTPUT_DIR, f'{output_prefix}_all_correlations.png')
-    plt.savefig(outfile, dpi=150)
-    print(f"Saved plot to {outfile}")
-    plt.close()
-
-
-def main():
-    parser = argparse.ArgumentParser(
-        description='Compute angular correlations with cucount and optionally compare with TreeCorr',
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+import numpy as np
+
+from cucount.numpy import BinAttrs, WeightAttrs, count2, setup_logging
+
+from observed_catalog_tools import (
+    DEFAULT_DESI_DATA,
+    DEFAULT_DESI_RANDOMS_GLOB,
+    DEFAULT_UNIONS_SOURCES,
+    create_particles,
+    load_desi_catalog,
+    load_unions_catalog,
+    resolve_random_catalogs,
+    safe_divide,
+    weighted_auto_norm,
+)
+
+
+def compute_wgg(
+    lenses,
+    lens_particles,
+    random_paths: list[str],
+    battrs: BinAttrs,
+    max_random_rows: int | None,
+    seed: int,
+    nthreads: int,
+) -> np.ndarray:
+    dd_counts = count2(lens_particles, lens_particles, battrs=battrs, nthreads=nthreads)['weight']
+    dd_normed = dd_counts / weighted_auto_norm(lenses.weights)
+
+    dr_normed_sum = np.zeros_like(dd_normed, dtype=np.float64)
+    rr_normed_sum = np.zeros_like(dd_normed, dtype=np.float64)
+    for index, random_path in enumerate(random_paths, start=1):
+        randoms = load_desi_catalog(random_path, max_rows=max_random_rows, seed=seed + index)
+        random_particles = create_particles(randoms.ra, randoms.dec, randoms.weights)
+        dr_counts = count2(lens_particles, random_particles, battrs=battrs, nthreads=nthreads)['weight']
+        rr_counts = count2(random_particles, random_particles, battrs=battrs, nthreads=nthreads)['weight']
+        dr_normed_sum += dr_counts / (np.sum(lenses.weights) * np.sum(randoms.weights))
+        rr_normed_sum += rr_counts / weighted_auto_norm(randoms.weights)
+
+    dr_normed = dr_normed_sum / len(random_paths)
+    rr_normed = rr_normed_sum / len(random_paths)
+    return safe_divide(dd_normed - 2.0 * dr_normed + rr_normed, rr_normed)
+
+
+def compute_gplus(
+    lens_particles,
+    source_particles,
+    source_scalar_particles,
+    random_paths: list[str],
+    battrs: BinAttrs,
+    max_random_rows: int | None,
+    seed: int,
+    nthreads: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    spin_weights = WeightAttrs(spin=(0, 2))
+    ps_spin = count2(lens_particles, source_particles, battrs=battrs, wattrs=spin_weights, nthreads=nthreads)
+    ps_pairs = count2(lens_particles, source_scalar_particles, battrs=battrs, nthreads=nthreads)['weight']
+
+    ps_t = safe_divide(ps_spin['weight_plus'], ps_pairs)
+    ps_x = safe_divide(ps_spin['weight_cross'], ps_pairs)
+
+    rs_t_sum = np.zeros_like(ps_t, dtype=np.float64)
+    rs_x_sum = np.zeros_like(ps_x, dtype=np.float64)
+    for index, random_path in enumerate(random_paths, start=1):
+        randoms = load_desi_catalog(random_path, max_rows=max_random_rows, seed=seed + index)
+        random_particles = create_particles(randoms.ra, randoms.dec, randoms.weights)
+        rs_spin = count2(random_particles, source_particles, battrs=battrs, wattrs=spin_weights, nthreads=nthreads)
+        rs_pairs = count2(random_particles, source_scalar_particles, battrs=battrs, nthreads=nthreads)['weight']
+        rs_t_sum += safe_divide(rs_spin['weight_plus'], rs_pairs)
+        rs_x_sum += safe_divide(rs_spin['weight_cross'], rs_pairs)
+
+    rs_t = rs_t_sum / len(random_paths)
+    rs_x = rs_x_sum / len(random_paths)
+    return ps_t - rs_t, ps_x - rs_x
+
+
+def compute_xi_spin_spin(
+    source_particles,
+    source_scalar_particles,
+    battrs: BinAttrs,
+    nthreads: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    spin_weights = WeightAttrs(spin=(2, 2))
+    ss_spin = count2(source_particles, source_particles, battrs=battrs, wattrs=spin_weights, nthreads=nthreads)
+    ss_pairs = count2(source_scalar_particles, source_scalar_particles, battrs=battrs, nthreads=nthreads)['weight']
+
+    xi_plus_plus = safe_divide(ss_spin['weight_plus_plus'], ss_pairs)
+    xi_plus_cross = safe_divide(ss_spin['weight_plus_cross'], ss_pairs)
+    xi_cross_cross = safe_divide(ss_spin['weight_cross_cross'], ss_pairs)
+    return xi_plus_plus, xi_plus_cross, xi_cross_cross
+
+
+def set_symlog(axis, values: np.ndarray, floor: float = 1e-9) -> None:
+    finite = np.asarray(values)[np.isfinite(values)]
+    nonzero = np.abs(finite[np.abs(finite) > 0])
+    linthresh = max(np.min(nonzero) * 0.8, floor) if nonzero.size else floor
+    axis.set_yscale('symlog', linthresh=linthresh)
+
+
+def plot_results(theta_centers: np.ndarray, results: dict[str, np.ndarray], output_path: Path) -> None:
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5), sharex=True)
+
+    axes[0].plot(theta_centers, results['xi_gg'], color='C3', marker='o', linewidth=1.8, markersize=4, label=r'$\xi_{gg}$')
+    axes[0].axhline(0.0, color='0.7', linewidth=1.0, linestyle='--')
+    axes[0].set_xscale('log')
+    set_symlog(axes[0], results['xi_gg'])
+    axes[0].set_title('DESI LRG Angular Clustering')
+    axes[0].set_xlabel(r'$\theta$ [deg]')
+    axes[0].set_ylabel(r'$\xi_{gg}(\theta)$')
+    axes[0].grid(True, alpha=0.25)
+    axes[0].legend(frameon=False)
+
+    axes[1].plot(theta_centers, results['xi_g_plus'], color='C0', marker='o', linewidth=1.8, markersize=4, label=r'$\xi_{g+}$')
+    axes[1].plot(theta_centers, results['xi_g_cross'], color='C1', marker='s', linewidth=1.5, markersize=4, label=r'$\xi_{g\times}$')
+    axes[1].axhline(0.0, color='0.7', linewidth=1.0, linestyle='--')
+    axes[1].set_xscale('log')
+    set_symlog(axes[1], np.concatenate([results['xi_g_plus'], results['xi_g_cross']]))
+    axes[1].set_title('DESI x UNIONS Galaxy-Shear')
+    axes[1].set_xlabel(r'$\theta$ [deg]')
+    axes[1].set_ylabel(r'$\xi_{g\pm}(\theta)$')
+    axes[1].grid(True, alpha=0.25)
+    axes[1].legend(frameon=False)
+
+    axes[2].plot(theta_centers, results['xi_plus_plus'], color='C2', marker='o', linewidth=1.8, markersize=4, label=r'$\xi_{++}$')
+    axes[2].plot(theta_centers, results['xi_plus_cross'], color='C4', marker='s', linewidth=1.5, markersize=4, label=r'$\xi_{+\times}$')
+    axes[2].plot(theta_centers, results['xi_cross_cross'], color='C5', marker='^', linewidth=1.5, markersize=4, label=r'$\xi_{\times\times}$')
+    axes[2].axhline(0.0, color='0.7', linewidth=1.0, linestyle='--')
+    axes[2].set_xscale('log')
+    set_symlog(
+        axes[2],
+        np.concatenate([results['xi_plus_plus'], results['xi_plus_cross'], results['xi_cross_cross']]),
     )
-    parser.add_argument('--no-treecorr', action='store_true',
-                        help='Skip TreeCorr comparison (cucount only)')
-    parser.add_argument('--data', type=str, default=DESI_DATA,
-                        help='Path to DESI LRG catalog')
-    parser.add_argument('--randoms', type=str, default=DESI_RAND,
-                        help='Path to DESI random catalog')
-    parser.add_argument('--sources', type=str, default=UNIONS_DATA,
-                        help='Path to UNIONS shape catalog (default: downsampled version)')
-    parser.add_argument('--use-full-sources', action='store_true',
-                        help='Use full UNIONS catalog instead of downsampled version')
-    parser.add_argument('--correlations', nargs='+', choices=['gg', 'gs', 'ss'],
-                        default=['gg', 'gs', 'ss'],
-                        help='Which correlations to compute')
-    parser.add_argument('--min-theta', type=float, default=MIN_THETA,
-                        help='Minimum theta in degrees')
-    parser.add_argument('--max-theta', type=float, default=MAX_THETA,
-                        help='Maximum theta in degrees')
-    parser.add_argument('--nbins', type=int, default=NBINS,
-                        help='Number of angular bins')
-    parser.add_argument('--output-prefix', type=str, default='angular_correlation',
-                        help='Prefix for output files')
-    parser.add_argument('--max-lenses', type=int, default=None,
-                        help='Maximum number of lens galaxies')
-    parser.add_argument('--max-sources', type=int, default=None,
-                        help='Maximum number of source galaxies')
-    parser.add_argument('--bin-slop', type=float, default=0.2,
-                        help='TreeCorr bin slop parameter (tolerance for bin placement)')
-    parser.add_argument('--treecorr-metric', type=str, default='Euclidean', choices=['Euclidean', 'Arc'],
-                        help='TreeCorr metric to use for distance calculations')
+    axes[2].set_title('UNIONS Shape Auto-Correlations')
+    axes[2].set_xlabel(r'$\theta$ [deg]')
+    axes[2].set_ylabel(r'$\xi(\theta)$')
+    axes[2].grid(True, alpha=0.25)
+    axes[2].legend(frameon=False)
 
+    fig.suptitle('Observed-Sky First-Step Correlations', fontsize=18)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=160)
+    plt.close(fig)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description='Measure DESI/UNIONS angular correlations with the current cucount API.',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument('--data', default=DEFAULT_DESI_DATA, help='Path to the DESI observed data catalog.')
+    parser.add_argument('--randoms-glob', default=DEFAULT_DESI_RANDOMS_GLOB, help='Glob pattern for DESI random catalogs.')
+    parser.add_argument('--sources', default=DEFAULT_UNIONS_SOURCES, help='Path to the UNIONS source catalog.')
+    parser.add_argument('--source-weight-col', default='auto', help='UNIONS weight column to use, or auto.')
+    parser.add_argument('--source-e1-col', default='e1', help='UNIONS e1 column.')
+    parser.add_argument('--source-e2-col', default='e2', help='UNIONS e2 column.')
+    parser.add_argument('--output-dir', default='examples/output/first_steps', help='Directory where outputs are written.')
+    parser.add_argument('--output-prefix', default='desi_unions_observed', help='Prefix for output files.')
+    parser.add_argument('--min-theta', type=float, default=0.01, help='Minimum theta in degrees.')
+    parser.add_argument('--max-theta', type=float, default=2.0, help='Maximum theta in degrees.')
+    parser.add_argument('--nbins', type=int, default=24, help='Number of angular bins.')
+    parser.add_argument('--max-lenses', type=int, default=None, help='Optional cap on DESI lens rows.')
+    parser.add_argument('--max-sources', type=int, default=5_000_000, help='Optional cap on UNIONS source rows.')
+    parser.add_argument('--max-random-files', type=int, default=4, help='Optional cap on random files for a first-step run.')
+    parser.add_argument('--max-random-rows', type=int, default=None, help='Optional cap on rows loaded from each random file.')
+    parser.add_argument('--seed', type=int, default=1234, help='Seed used for reproducible sub-sampling.')
+    parser.add_argument('--nthreads', type=int, default=1, help='Number of GPUs for cucount to use on the node.')
+    parser.add_argument('--log-level', default='info', choices=['debug', 'info', 'warning', 'error'])
     args = parser.parse_args()
 
-    # Use full catalog if requested
-    if args.use_full_sources:
-        args.sources = UNIONS_DATA_FULL
-        print(f"Using full UNIONS catalog: {args.sources}")
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    setup_logging(args.log_level)
 
-    # Create output directory
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    random_paths = resolve_random_catalogs(args.randoms_glob, max_files=args.max_random_files)
+    theta_edges = np.geomspace(args.min_theta, args.max_theta, args.nbins + 1)
+    theta_centers = np.sqrt(theta_edges[:-1] * theta_edges[1:])
+    battrs = BinAttrs(theta=theta_edges)
 
-    # Check if TreeCorr should be run
-    run_treecorr = not args.no_treecorr and TREECORR_AVAILABLE
+    print('=' * 72)
+    print('Observed-sky DESI/UNIONS correlations')
+    print('=' * 72)
+    print(f'Lenses          : {args.data}')
+    print(f'Random catalogs : {len(random_paths)} files')
+    print(f'Sources         : {args.sources}')
+    print(f'Theta range     : [{args.min_theta:.4f}, {args.max_theta:.2f}] deg')
+    print('=' * 72)
 
-    print("=" * 60)
-    print("Angular Correlation Analysis")
-    print("=" * 60)
-    print(f"Mode: {'cucount + TreeCorr comparison' if run_treecorr else 'cucount only'}")
-    print(f"Correlations: {', '.join(args.correlations)}")
-    print("=" * 60)
+    print('\nLoading DESI lenses...')
+    lenses = load_desi_catalog(args.data, max_rows=args.max_lenses, seed=args.seed)
+    lens_particles = create_particles(lenses.ra, lenses.dec, lenses.weights)
+    print(f'  Kept {lenses.size:,} lenses')
 
-    # Create theta bins
-    theta_edges_deg = np.logspace(np.log10(args.min_theta), np.log10(args.max_theta), args.nbins + 1)
-    theta_centers_deg = np.sqrt(theta_edges_deg[:-1] * theta_edges_deg[1:])  # geometric mean
-    theta_edges_rad = theta_edges_deg * (np.pi / 180.0)
+    print('\nLoading UNIONS sources...')
+    sources = load_unions_catalog(
+        args.sources,
+        max_rows=args.max_sources,
+        seed=args.seed + 100,
+        weight_col=args.source_weight_col,
+        e1_col=args.source_e1_col,
+        e2_col=args.source_e2_col,
+    )
+    source_particles = create_particles(sources.ra, sources.dec, sources.weights, shear=(sources.e1, sources.e2))
+    source_scalar_particles = create_particles(sources.ra, sources.dec, sources.weights)
+    print(f'  Kept {sources.size:,} sources')
 
-    print(f"\nTheta range: {args.min_theta:.3f} - {args.max_theta:.2f} degrees ({args.nbins} bins)")
+    results: dict[str, np.ndarray] = {}
 
-    # Load catalogs
-    print("\n" + "=" * 60)
-    print("Loading Catalogs")
-    print("=" * 60)
+    print('\nComputing xi_gg(theta)...')
+    t0 = time.time()
+    results['xi_gg'] = compute_wgg(
+        lenses,
+        lens_particles,
+        random_paths,
+        battrs,
+        max_random_rows=args.max_random_rows,
+        seed=args.seed + 200,
+        nthreads=args.nthreads,
+    )
+    print(f'  Completed in {time.time() - t0:.2f} s')
 
-    data_ra, data_dec, data_w = load_desi_catalog(args.data)
-    rand_ra, rand_dec, rand_w = load_desi_catalog(args.randoms)
+    print('\nComputing xi_g+(theta) and xi_gx(theta)...')
+    t0 = time.time()
+    results['xi_g_plus'], results['xi_g_cross'] = compute_gplus(
+        lens_particles,
+        source_particles,
+        source_scalar_particles,
+        random_paths,
+        battrs,
+        max_random_rows=args.max_random_rows,
+        seed=args.seed + 400,
+        nthreads=args.nthreads,
+    )
+    print(f'  Completed in {time.time() - t0:.2f} s')
 
-    # Subsample if requested
-    if args.max_lenses:
-        n = min(args.max_lenses, len(data_ra))
-        idx = np.random.choice(len(data_ra), n, replace=False)
-        data_ra, data_dec, data_w = data_ra[idx], data_dec[idx], data_w[idx]
-        print(f"  Subsampled lenses to {n}")
+    print('\nComputing xi_++(theta), xi_+x(theta), and xi_xx(theta)...')
+    t0 = time.time()
+    results['xi_plus_plus'], results['xi_plus_cross'], results['xi_cross_cross'] = compute_xi_spin_spin(
+        source_particles,
+        source_scalar_particles,
+        battrs,
+        nthreads=args.nthreads,
+    )
+    print(f'  Completed in {time.time() - t0:.2f} s')
 
-    # Load sources if needed
-    sources = None
-    src_ra = src_dec = src_w = src_e1 = src_e2 = None
-    if any(c in args.correlations for c in ['gs', 'ss']):
-        src_ra, src_dec, src_w, src_e1, src_e2 = load_unions_catalog(args.sources, max_sources=args.max_sources)
+    results_path = output_dir / f'{args.output_prefix}_results.npz'
+    np.savez(results_path, theta_edges=theta_edges, theta_centers=theta_centers, **results)
+    print(f'\nSaved arrays to {results_path}')
 
-        # Create particles with ellipticities (use negative sign convention)
-        sources = create_particles(src_ra, src_dec, src_w,
-                                   ellipticities=np.column_stack([-src_e1, -src_e2]))
+    figure_path = output_dir / f'{args.output_prefix}_summary.png'
+    plot_results(theta_centers, results, figure_path)
+    print(f'Saved figure to {figure_path}')
 
-    # Create particle objects
-    lenses = create_particles(data_ra, data_dec, data_w)
-    randoms = create_particles(rand_ra, rand_dec, rand_w)
 
-    print(f"\nCreated {len(data_ra)} lenses, {len(rand_ra)} randoms" +
-          (f", {len(src_ra)} sources" if sources is not None else ""))
-
-    # Compute correlations with cucount
-    print("\n" + "=" * 60)
-    print("Computing Correlations with cucount")
-    print("=" * 60)
-
-    results = {}
-    cucount_timings = {}
-
-    if 'gg' in args.correlations:
-        print("\n→ ξ_gg(θ): Galaxy-galaxy clustering")
-        results['xi_gg'], cucount_timings['gg'] = compute_wgg_cucount(lenses, randoms, theta_edges_rad)
-        print(f"  Range: [{results['xi_gg'].min():.2e}, {results['xi_gg'].max():.2e}]")
-        print(f"  Time: {cucount_timings['gg']:.3f} s")
-
-    if 'gs' in args.correlations and sources is not None:
-        print("\n→ γ_t(θ), γ_×(θ): Galaxy-shear (GGL)")
-        results['xi_g_plus'], results['xi_g_cross'], cucount_timings['gs'] = compute_wg_cucount(lenses, sources, randoms, theta_edges_rad)
-        print(f"  γ_t range: [{results['xi_g_plus'].min():.2e}, {results['xi_g_plus'].max():.2e}]")
-        print(f"  γ_× range: [{results['xi_g_cross'].min():.2e}, {results['xi_g_cross'].max():.2e}]")
-        print(f"  Time: {cucount_timings['gs']:.3f} s")
-
-    if 'ss' in args.correlations and sources is not None:
-        print("\n→ ξ_++(θ), ξ_+×(θ), ξ_××(θ): Shape-shape (cosmic shear)")
-        results['xi_plus_plus'], results['xi_cross_plus'], results['xi_cross_cross'], cucount_timings['ss'] = compute_wss_cucount(sources, theta_edges_rad)
-        print(f"  ξ_++ range: [{results['xi_plus_plus'].min():.2e}, {results['xi_plus_plus'].max():.2e}]")
-        print(f"  ξ_+× range: [{results['xi_cross_plus'].min():.2e}, {results['xi_cross_plus'].max():.2e}]")
-        print(f"  ξ_×× range: [{results['xi_cross_cross'].min():.2e}, {results['xi_cross_cross'].max():.2e}]")
-        print(f"  Time: {cucount_timings['ss']:.3f} s")
-
-    # Compute with TreeCorr if requested
-    treecorr_timings = None
-    if run_treecorr:
-        print("\n" + "=" * 60)
-        print("Computing Correlations with TreeCorr")
-        print("=" * 60)
-
-        lenses_data = {'ra': data_ra, 'dec': data_dec, 'weights': data_w}
-        randoms_data = {'ra': rand_ra, 'dec': rand_dec, 'weights': rand_w}
-        sources_data = None
-        if any(c in args.correlations for c in ['gs', 'ss']):
-            sources_data = {'ra': src_ra, 'dec': src_dec, 'weights': src_w,
-                           'e1': src_e1, 'e2': src_e2}
-
-        treecorr_results, treecorr_timings = compute_correlations_treecorr(lenses_data, sources_data, randoms_data,
-                                                                           theta_edges_deg, args.correlations,
-                                                                           bin_slop=args.bin_slop, metric=args.treecorr_metric)
-        results.update(treecorr_results)
-
-    # Print timing comparison
-    print_timing_table(cucount_timings, treecorr_timings)
-
-    # Save results
-    print("\n" + "=" * 60)
-    print("Saving Results")
-    print("=" * 60)
-
-    outfile = os.path.join(OUTPUT_DIR, f'{args.output_prefix}_results.npz')
-    np.savez(outfile, theta_centers=theta_centers_deg, theta_edges=theta_edges_deg, **results)
-    print(f"Saved results to {outfile}")
-
-    # Create plots
-    print("\n" + "=" * 60)
-    print("Creating Plots")
-    print("=" * 60)
-
-    plot_correlations(results, theta_centers_deg, args.correlations, args.output_prefix)
-
-    print("\n" + "=" * 60)
-    print("Complete!")
-    print("=" * 60)
-
-if __name__ == "__main__":
-
+if __name__ == '__main__':
     main()
