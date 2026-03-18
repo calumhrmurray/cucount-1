@@ -4,7 +4,10 @@ Measure density around the local displacement direction on the sky.
 
 The displacement reference direction is taken from the same first catalog spin-1
 field used for phi binning:
-    spin_values = (dRA * cos(dec), dDec)
+    spin_values = (dDec, dRA * cos(dec))
+
+where the stored components are ordered as (north, east) in the local tangent
+plane, so positive and negative displacements remain distinct.
 
 Outputs:
 - a polar `(theta, phi)` correlation saved to NPZ
@@ -143,8 +146,8 @@ def plot_xy_map(
     axes[0].axvline(0.0, color='0.7', linewidth=1.0)
     axes[0].set_aspect('equal', adjustable='box')
     axes[0].set_title('Density Correlation in Displacement-Aligned Frame')
-    axes[0].set_xlabel(r'$x = \theta \cos \phi$ [deg]')
-    axes[0].set_ylabel(r'$y = \theta \sin \phi$ [deg]')
+    axes[0].set_xlabel(r'$x_{\mathrm{north}} = \theta \cos \phi$ [deg]')
+    axes[0].set_ylabel(r'$y_{\mathrm{east}} = \theta \sin \phi$ [deg]')
     fig.colorbar(pcm, ax=axes[0], label=r'$\xi(x, y)$')
 
     axes[1].pcolormesh(x, y, xi_density, shading='auto', cmap='Greys', alpha=0.35)
@@ -153,8 +156,8 @@ def plot_xy_map(
     axes[1].axvline(0.0, color='0.7', linewidth=1.0)
     axes[1].set_aspect('equal', adjustable='box')
     axes[1].set_title('Mean Projected Displacement')
-    axes[1].set_xlabel(r'$x = \theta \cos \phi$ [deg]')
-    axes[1].set_ylabel(r'$y = \theta \sin \phi$ [deg]')
+    axes[1].set_xlabel(r'$x_{\mathrm{north}} = \theta \cos \phi$ [deg]')
+    axes[1].set_ylabel(r'$y_{\mathrm{east}} = \theta \sin \phi$ [deg]')
 
     fig.savefig(output_path, dpi=180)
     plt.close(fig)
@@ -216,11 +219,13 @@ def main() -> None:
     )
     print(f'Loaded {data.size:,} displacement tracers')
 
+    # For spin-1 vectors the kernel expects (north, east) components with no
+    # extra shear-convention sign flip.
     spin_particles = create_particles(
         data.ra,
         data.dec,
         data.weights,
-        shear=(dalpha_cosdec_arcsec, ddec_arcsec),
+        spin_values=(ddec_arcsec, dalpha_cosdec_arcsec),
     )
     density_particles = create_particles(data.ra, data.dec, data.weights)
 

@@ -124,11 +124,16 @@ def create_particles(
     weights: np.ndarray,
     distance: np.ndarray | None = None,
     shear: tuple[np.ndarray, np.ndarray] | None = None,
+    spin_values: tuple[np.ndarray, np.ndarray] | None = None,
 ) -> Particles:
     positions = sky_to_cartesian(ra_deg, dec_deg, distance=distance)
     kwargs = {}
+    if (shear is not None) and (spin_values is not None):
+        raise ValueError('Provide either shear or spin_values, not both')
     if shear is not None:
         kwargs['spin_values'] = -np.column_stack([np.asarray(shear[0], dtype=np.float64), np.asarray(shear[1], dtype=np.float64)])
+    if spin_values is not None:
+        kwargs['spin_values'] = np.column_stack([np.asarray(spin_values[0], dtype=np.float64), np.asarray(spin_values[1], dtype=np.float64)])
     return Particles(positions, weights=np.asarray(weights, dtype=np.float64), **kwargs)
 
 
