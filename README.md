@@ -55,6 +55,11 @@ counts = count2(particles1, particles2, battrs=battrs, nthreads=4)
 # counts is a dictionary with key "weight"
 ```
 
+For angular measurements on the sky, you can also request `phi` bins in addition to `theta` with
+`BinAttrs(theta=theta_edges, phi=phi_edges)`. In the current implementation, `phi` is defined relative
+to the phase of the first catalog spin field, so catalog 1 must provide `spin_values` and a non-zero
+`WeightAttrs(spin=(s1, s2))` with `s1 != 0`.
+
 ---
 
 ## ⚡ JAX API

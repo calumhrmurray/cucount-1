@@ -35,6 +35,7 @@ VAR_TYPE string_to_var_type(const std::string& var_name) {
     if (var_name == "rp") return VAR_RP;
     if (var_name == "pi") return VAR_PI;
     if (var_name == "theta") return VAR_THETA;
+    if (var_name == "phi") return VAR_PHI;
     if (var_name == "pole") return VAR_POLE;
     if (var_name == "k") return VAR_K;
     throw std::invalid_argument("Invalid VAR_TYPE string: " + var_name);
@@ -49,6 +50,7 @@ std::string var_type_to_string(VAR_TYPE v) {
         case VAR_RP: return "rp";
         case VAR_PI: return "pi";
         case VAR_THETA: return "theta";
+        case VAR_PHI: return "phi";
         case VAR_POLE: return "pole";
         case VAR_K: return "k";
         default: return "";

@@ -170,38 +170,66 @@ __device__ inline bool is_selected(FLOAT *sposition1, FLOAT *sposition2, FLOAT *
 }
 
 
+__device__ inline void compute_local_tangent_basis(const FLOAT *r1, FLOAT *east, FLOAT *north) {
+    const FLOAT zhat[3] = {0.0, 0.0, 1.0};
+    const FLOAT xhat[3] = {1.0, 0.0, 0.0};
+
+    east[0] = zhat[1] * r1[2] - zhat[2] * r1[1];
+    east[1] = zhat[2] * r1[0] - zhat[0] * r1[2];
+    east[2] = zhat[0] * r1[1] - zhat[1] * r1[0];
+    FLOAT east_norm2 = east[0] * east[0] + east[1] * east[1] + east[2] * east[2];
+    if (east_norm2 < 1e-24) {
+        east[0] = xhat[1] * r1[2] - xhat[2] * r1[1];
+        east[1] = xhat[2] * r1[0] - xhat[0] * r1[2];
+        east[2] = xhat[0] * r1[1] - xhat[1] * r1[0];
+        east_norm2 = east[0] * east[0] + east[1] * east[1] + east[2] * east[2];
+    }
+    FLOAT east_norm = 1.0 / sqrt(east_norm2);
+    east[0] *= east_norm; east[1] *= east_norm; east[2] *= east_norm;
+
+    north[0] = r1[1] * east[2] - r1[2] * east[1];
+    north[1] = r1[2] * east[0] - r1[0] * east[2];
+    north[2] = r1[0] * east[1] - r1[1] * east[0];
+}
+
+
+__device__ inline FLOAT compute_pair_angle_cartesian(const FLOAT *r1, const FLOAT *r2) {
+    FLOAT east[3], north[3];
+    compute_local_tangent_basis(r1, east, north);
+
+    FLOAT dot12 = r1[0] * r2[0] + r1[1] * r2[1] + r1[2] * r2[2];
+    FLOAT p[3] = {r2[0] - dot12 * r1[0],
+                  r2[1] - dot12 * r1[1],
+                  r2[2] - dot12 * r1[2]};
+    FLOAT pe = p[0] * east[0] + p[1] * east[1] + p[2] * east[2];
+    FLOAT pn = p[0] * north[0] + p[1] * north[1] + p[2] * north[2];
+    FLOAT phi = atan2(pe, pn);
+    if (phi < 0.) phi += 2.0 * M_PI;
+    return phi;
+}
+
+
+__device__ inline FLOAT wrap_angle_period(FLOAT angle, FLOAT period) {
+    angle = fmod(angle, period);
+    if (angle < 0.) angle += period;
+    return angle;
+}
+
+
+__device__ inline FLOAT compute_spin_phase(const FLOAT *s, int spin) {
+    FLOAT phi = atan2(s[1], s[0]);
+    if (phi < 0.) phi += 2.0 * M_PI;
+    return phi / spin;
+}
+
+
 __device__ inline void compute_spin_projection_cartesian(
     const FLOAT *r1, const FLOAT *r2, FLOAT* s, int spin,
     FLOAT *splus_out, FLOAT *scross_out)
 {
     // r1 and r2 are assumed on the sphere
     if (spin != 0) {
-
-        // Reference "north pole" vector
-        const FLOAT zhat[3] = {0.0, 0.0, 1.0};
-
-        // Compute east and north basis at r1
-        FLOAT east[3] = {zhat[1] * r1[2] - zhat[2] * r1[1],
-                         zhat[2] * r1[0] - zhat[0] * r1[2],
-                         zhat[0] * r1[1] - zhat[1] * r1[0]};
-        FLOAT east_norm = rsqrtf(east[0] * east[0] + east[1] * east[1] + east[2] * east[2]);
-        east[0] *= east_norm; east[1] *= east_norm; east[2] *= east_norm;
-
-        FLOAT north[3] = {r1[1] * east[2] - r1[2] * east[1],
-                          r1[2] * east[0] - r1[0] * east[2],
-                          r1[0] * east[1] - r1[1] * east[0]};
-
-        // Project r2 into tangent plane at r1
-        FLOAT dot12 = r1[0] * r2[0] + r1[1] * r2[1] + r1[2] * r2[2];
-        FLOAT p[3] = {r2[0] - dot12 * r1[0],
-                      r2[1] - dot12 * r1[1],
-                      r2[2] - dot12 * r1[2]};
-
-        // Position angle (no need for normalization of p)
-        FLOAT pe = p[0] * east[0] + p[1] * east[1] + p[2] * east[2];
-        FLOAT pn = p[0] * north[0] + p[1] * north[1] + p[2] * north[2];
-        FLOAT phi = atan2(pe, pn);
-
+        FLOAT phi = compute_pair_angle_cartesian(r1, r2);
         FLOAT sphi = sin(spin * phi);
         FLOAT cphi = cos(spin * phi);
 
@@ -381,6 +409,13 @@ __device__ inline void add_weight(FLOAT *counts, FLOAT *sposition1, FLOAT *sposi
         }
         else if (var == VAR_THETA) {
             value = acos(dot(sposition1, sposition2)) / DTORAD;
+        }
+        else if (var == VAR_PHI) {
+            if (!(index_value1.size_spin && wattrs.spin[0])) return;
+            FLOAT pair_angle = compute_pair_angle_cartesian(sposition1, sposition2);
+            FLOAT ref_angle = compute_spin_phase(&(value1[index_value1.start_spin]), wattrs.spin[0]);
+            FLOAT period = 2.0 * M_PI / wattrs.spin[0];
+            value = wrap_angle_period(pair_angle - ref_angle, period) / DTORAD;
         }
         else if (var == VAR_PI) {
             value = mu * s;

@@ -203,6 +203,7 @@ class WeightAttrs(object):
         if self.spin is not None:
             assert len(self.spin) == len(particles), "Provide as many WeightAttrs.spin as Particles catalogs"
             assert all(bool(particle.get('spin')) == bool(spin) for spin, particle in zip(self.spin, particles)), "Provide spin_values whenever WeightAttrs.spin != 0"
+            assert all((spin == 0) or (len(particle.get('spin')) == 2) for spin, particle in zip(self.spin, particles)), "Spin fields currently require exactly two components per particle"
         nbitwises = [len(particle.get('bitwise_weight')) for particle in particles]
         if any(nbitwises):
             assert self.bitwise is not None, 'Particles have bitwise weights, so provide bitwise to WeightAttrs'
@@ -243,6 +244,7 @@ class BinAttrs(cucountlib.cucount.BinAttrs):
     - rp = (edge array or (min, max, step), line-of-sight (midpoint, firstpoint, endpoint, x, y, z))
     - pi = (edge array or (min, max, step), line-of-sight (midpoint, firstpoint, endpoint, x, y, z))
     - theta = edge array or (min, max, step)  # in degrees
+    - phi = edge array or (min, max, step)  # in degrees, relative to the first catalog spin phase
     """
     def edges(self, name=None):
         def edge(array, name):
@@ -345,10 +347,11 @@ class MeshAttrs(object):
                 else: limits[name] = lim
 
         for name, lim in limits.items():
-            if name == 'theta':
+            if name in ['theta', 'phi']:
                 mesh_type = 'angular'
-                mesh_smax = np.cos(np.radians(lim))
-                break
+                if name == 'theta':
+                    mesh_smax = np.cos(np.radians(lim))
+                    break
             elif name == 's':
                 mesh_type = 'cartesian'
                 mesh_smax = lim
@@ -357,6 +360,8 @@ class MeshAttrs(object):
                 mesh_type = 'cartesian'
 
         assert mesh_type is not None, 'cannot determine mesh type from sattrs or battrs; provide at least one'
+        if mesh_type == 'angular' and mesh_smax is None:
+            mesh_smax = -1.
         if mesh_smax is None and all(name in limits for name in ['rp', 'pi']):
             mesh_smax = (limits['rp']**2 + limits['pi']**2)**0.5
         ndim = {'angular': 2, 'cartesian': 3}[mesh_type]
@@ -621,6 +626,15 @@ class Particles(object):
         return new
 
 
+def _validate_phi_binning(*particles, battrs: BinAttrs, wattrs: WeightAttrs) -> None:
+    if 'phi' not in battrs.varnames:
+        return
+    if wattrs.spin is None or len(wattrs.spin) != len(particles) or not wattrs.spin[0]:
+        raise ValueError("Binning in phi requires WeightAttrs.spin with a non-zero spin for the first catalog")
+    if len(particles[0].get('spin')) != 2:
+        raise ValueError("Binning in phi requires the first catalog to provide exactly two spin components per particle")
+
+
 def count2(*particles: Particles, battrs: BinAttrs, wattrs: WeightAttrs=None, sattrs: SelectionAttrs=None, mattrs: MeshAttrs=None, nthreads: int=1):
     """
     Perform two-point pair counts using the native cucount library.
@@ -654,6 +668,7 @@ def count2(*particles: Particles, battrs: BinAttrs, wattrs: WeightAttrs=None, sa
     assert len(particles) == 2
     if wattrs is None: wattrs = WeightAttrs()
     wattrs.check(*particles)
+    _validate_phi_binning(*particles, battrs=battrs, wattrs=wattrs)
     if sattrs is None: sattrs = SelectionAttrs()
     if mattrs is None: mattrs = MeshAttrs(*particles, sattrs=sattrs, battrs=battrs)
     particles = [cucountlib.cucount.Particles(p.positions, values=_concatenate_values(p.values, np=np), **p.index_value._to_c()) for p in particles]

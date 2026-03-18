@@ -13,7 +13,7 @@ from jax.experimental import mesh_utils
 from jax.sharding import PartitionSpec as P
 
 from cucountlib import ffi_cucount
-from cucount.numpy import BinAttrs, SelectionAttrs, _make_list_weights, _format_positions, _format_values, _concatenate_values, count2_analytic, setup_logging, _setup_cucount_logging
+from cucount.numpy import BinAttrs, SelectionAttrs, _make_list_weights, _format_positions, _format_values, _concatenate_values, _validate_phi_binning, count2_analytic, setup_logging, _setup_cucount_logging
 from cucount import numpy
 
 
@@ -226,6 +226,7 @@ def count2(*particles: Particles, battrs: BinAttrs, wattrs: WeightAttrs=None, sa
     if sattrs is None: sattrs = SelectionAttrs()
     if mattrs is None: mattrs = MeshAttrs(*particles, sattrs=sattrs, battrs=battrs)
     wattrs.check(*particles)
+    _validate_phi_binning(*particles, battrs=battrs, wattrs=wattrs)
     count2 = _count2 = partial(_count2_no_shard, mattrs=mattrs, battrs=battrs, wattrs=wattrs, sattrs=sattrs)
     if sharding_mesh.axis_names:
         #assert all(particle.exchanged for particle in particles), 'All input particles should be exchanged'
