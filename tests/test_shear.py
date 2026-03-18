@@ -93,7 +93,7 @@ def test(backend='numpy', write=False):
                 create_cucount_particles(catalogs[1], with_spin=True)]
     wattrs = WeightAttrs(spin=(0, 2))
     counts = count2(*particles, battrs=battrs, wattrs=wattrs)
-    counts_ref = counts = np.column_stack(list(counts.values()))
+    counts_ref = counts = np.column_stack([counts['weight_plus'], counts['weight_cross']])
     fn = dirname / 'counts_gs.txt'
     if write: np.savetxt(fn, counts)
     else: counts_ref = np.loadtxt(fn)
@@ -105,7 +105,7 @@ def test(backend='numpy', write=False):
     particles = [create_cucount_particles(catalog, with_spin=True) for catalog in catalogs]
     wattrs = WeightAttrs(spin=(2, 2))
     counts = count2(*particles, battrs=battrs, wattrs=wattrs)
-    counts_ref = counts = np.column_stack(list(counts.values()))
+    counts_ref = counts = np.column_stack([counts['weight_plus_plus'], counts['weight_plus_cross'], counts['weight_cross_cross']])
     fn = dirname / 'counts_ss.txt'
     if write: np.savetxt(fn, counts)
     else: counts_ref = np.loadtxt(fn)

@@ -3,16 +3,16 @@ set -euo pipefail
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 python_bin="${PYTHON_BIN:-python3}"
-venv_dir="${VENV_DIR:-$repo_dir/.venv-cc-lyon}"
+venv_dir="${VENV_DIR:-$repo_dir/.venv-gpu}"
 output_dir="${OUTPUT_DIR:-$repo_dir/examples/output/first_steps}"
 
 if ! command -v nvcc >/dev/null 2>&1; then
-  echo "nvcc is required to build cucount on cc-lyon."
+  echo "nvcc is required to build cucount for this GPU workflow."
   exit 1
 fi
 
 if ! command -v cmake >/dev/null 2>&1; then
-  echo "cmake is required to build cucount on cc-lyon."
+  echo "cmake is required to build cucount for this GPU workflow."
   exit 1
 fi
 

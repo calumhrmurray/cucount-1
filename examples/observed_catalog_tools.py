@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import glob
+import os
 from dataclasses import dataclass
 
 import numpy as np
@@ -9,9 +10,9 @@ from astropy.io import fits
 from cucount.numpy import Particles
 
 
-DEFAULT_DESI_DATA = '/sps/euclid/Users/cmurray/DESI/catalogs/LRG_NGC_clustering.dat.fits'
-DEFAULT_DESI_RANDOMS_GLOB = '/sps/euclid/Users/cmurray/DESI/catalogs/LRG_NGC_[0-9]*_clustering.ran.fits'
-DEFAULT_UNIONS_SOURCES = '/sps/euclid/Users/cmurray/UNIONS/unions_shapepipe_cut_struc_2024_v1.5.3.fits'
+DEFAULT_DESI_DATA = os.environ.get('CUCOUNT_DESI_DATA')
+DEFAULT_DESI_RANDOMS_GLOB = os.environ.get('CUCOUNT_DESI_RANDOMS_GLOB')
+DEFAULT_UNIONS_SOURCES = os.environ.get('CUCOUNT_UNIONS_SOURCES')
 
 DEFAULT_DESI_H = 0.6766
 DEFAULT_DESI_OMEGA_M = 0.3111

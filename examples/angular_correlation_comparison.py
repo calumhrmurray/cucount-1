@@ -160,9 +160,24 @@ def main() -> None:
         description='Measure DESI/UNIONS angular correlations with the current cucount API.',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument('--data', default=DEFAULT_DESI_DATA, help='Path to the DESI observed data catalog.')
-    parser.add_argument('--randoms-glob', default=DEFAULT_DESI_RANDOMS_GLOB, help='Glob pattern for DESI random catalogs.')
-    parser.add_argument('--sources', default=DEFAULT_UNIONS_SOURCES, help='Path to the UNIONS source catalog.')
+    parser.add_argument(
+        '--data',
+        default=DEFAULT_DESI_DATA,
+        required=DEFAULT_DESI_DATA is None,
+        help='Path to the DESI observed data catalog. Defaults to $CUCOUNT_DESI_DATA when set.',
+    )
+    parser.add_argument(
+        '--randoms-glob',
+        default=DEFAULT_DESI_RANDOMS_GLOB,
+        required=DEFAULT_DESI_RANDOMS_GLOB is None,
+        help='Glob pattern for DESI random catalogs. Defaults to $CUCOUNT_DESI_RANDOMS_GLOB when set.',
+    )
+    parser.add_argument(
+        '--sources',
+        default=DEFAULT_UNIONS_SOURCES,
+        required=DEFAULT_UNIONS_SOURCES is None,
+        help='Path to the UNIONS source catalog. Defaults to $CUCOUNT_UNIONS_SOURCES when set.',
+    )
     parser.add_argument('--source-weight-col', default='auto', help='UNIONS weight column to use, or auto.')
     parser.add_argument('--source-e1-col', default='e1', help='UNIONS e1 column.')
     parser.add_argument('--source-e2-col', default='e2', help='UNIONS e2 column.')
