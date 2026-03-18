@@ -114,44 +114,53 @@ def set_symlog(axis, values: np.ndarray, floor: float = 1e-9) -> None:
     axis.set_yscale('symlog', linthresh=linthresh)
 
 
-def plot_results(theta_centers: np.ndarray, results: dict[str, np.ndarray], output_path: Path) -> None:
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5), sharex=True)
+def plot_results(
+    theta_centers: np.ndarray,
+    results: dict[str, np.ndarray],
+    correlations: list[str],
+    output_path: Path,
+) -> None:
+    fig, axes = plt.subplots(1, len(correlations), figsize=(6 * len(correlations), 5), sharex=True)
+    if len(correlations) == 1:
+        axes = [axes]
 
-    axes[0].plot(theta_centers, results['xi_gg'], color='C3', marker='o', linewidth=1.8, markersize=4, label=r'$\xi_{gg}$')
-    axes[0].axhline(0.0, color='0.7', linewidth=1.0, linestyle='--')
-    axes[0].set_xscale('log')
-    set_symlog(axes[0], results['xi_gg'])
-    axes[0].set_title('DESI LRG Angular Clustering')
-    axes[0].set_xlabel(r'$\theta$ [deg]')
-    axes[0].set_ylabel(r'$\xi_{gg}(\theta)$')
-    axes[0].grid(True, alpha=0.25)
-    axes[0].legend(frameon=False)
-
-    axes[1].plot(theta_centers, results['xi_g_plus'], color='C0', marker='o', linewidth=1.8, markersize=4, label=r'$\xi_{g+}$')
-    axes[1].plot(theta_centers, results['xi_g_cross'], color='C1', marker='s', linewidth=1.5, markersize=4, label=r'$\xi_{g\times}$')
-    axes[1].axhline(0.0, color='0.7', linewidth=1.0, linestyle='--')
-    axes[1].set_xscale('log')
-    set_symlog(axes[1], np.concatenate([results['xi_g_plus'], results['xi_g_cross']]))
-    axes[1].set_title('DESI x UNIONS Galaxy-Shear')
-    axes[1].set_xlabel(r'$\theta$ [deg]')
-    axes[1].set_ylabel(r'$\xi_{g\pm}(\theta)$')
-    axes[1].grid(True, alpha=0.25)
-    axes[1].legend(frameon=False)
-
-    axes[2].plot(theta_centers, results['xi_plus_plus'], color='C2', marker='o', linewidth=1.8, markersize=4, label=r'$\xi_{++}$')
-    axes[2].plot(theta_centers, results['xi_plus_cross'], color='C4', marker='s', linewidth=1.5, markersize=4, label=r'$\xi_{+\times}$')
-    axes[2].plot(theta_centers, results['xi_cross_cross'], color='C5', marker='^', linewidth=1.5, markersize=4, label=r'$\xi_{\times\times}$')
-    axes[2].axhline(0.0, color='0.7', linewidth=1.0, linestyle='--')
-    axes[2].set_xscale('log')
-    set_symlog(
-        axes[2],
-        np.concatenate([results['xi_plus_plus'], results['xi_plus_cross'], results['xi_cross_cross']]),
-    )
-    axes[2].set_title('UNIONS Shape Auto-Correlations')
-    axes[2].set_xlabel(r'$\theta$ [deg]')
-    axes[2].set_ylabel(r'$\xi(\theta)$')
-    axes[2].grid(True, alpha=0.25)
-    axes[2].legend(frameon=False)
+    for axis, correlation in zip(axes, correlations):
+        if correlation == 'gg':
+            axis.plot(theta_centers, results['xi_gg'], color='C3', marker='o', linewidth=1.8, markersize=4, label=r'$\xi_{gg}$')
+            axis.axhline(0.0, color='0.7', linewidth=1.0, linestyle='--')
+            axis.set_xscale('log')
+            set_symlog(axis, results['xi_gg'])
+            axis.set_title('DESI LRG Angular Clustering')
+            axis.set_xlabel(r'$\theta$ [deg]')
+            axis.set_ylabel(r'$\xi_{gg}(\theta)$')
+            axis.grid(True, alpha=0.25)
+            axis.legend(frameon=False)
+        elif correlation == 'gs':
+            axis.plot(theta_centers, results['xi_g_plus'], color='C0', marker='o', linewidth=1.8, markersize=4, label=r'$\xi_{g+}$')
+            axis.plot(theta_centers, results['xi_g_cross'], color='C1', marker='s', linewidth=1.5, markersize=4, label=r'$\xi_{g\times}$')
+            axis.axhline(0.0, color='0.7', linewidth=1.0, linestyle='--')
+            axis.set_xscale('log')
+            set_symlog(axis, np.concatenate([results['xi_g_plus'], results['xi_g_cross']]))
+            axis.set_title('DESI x UNIONS Galaxy-Shear')
+            axis.set_xlabel(r'$\theta$ [deg]')
+            axis.set_ylabel(r'$\xi_{g\pm}(\theta)$')
+            axis.grid(True, alpha=0.25)
+            axis.legend(frameon=False)
+        elif correlation == 'ss':
+            axis.plot(theta_centers, results['xi_plus_plus'], color='C2', marker='o', linewidth=1.8, markersize=4, label=r'$\xi_{++}$')
+            axis.plot(theta_centers, results['xi_plus_cross'], color='C4', marker='s', linewidth=1.5, markersize=4, label=r'$\xi_{+\times}$')
+            axis.plot(theta_centers, results['xi_cross_cross'], color='C5', marker='^', linewidth=1.5, markersize=4, label=r'$\xi_{\times\times}$')
+            axis.axhline(0.0, color='0.7', linewidth=1.0, linestyle='--')
+            axis.set_xscale('log')
+            set_symlog(
+                axis,
+                np.concatenate([results['xi_plus_plus'], results['xi_plus_cross'], results['xi_cross_cross']]),
+            )
+            axis.set_title('UNIONS Shape Auto-Correlations')
+            axis.set_xlabel(r'$\theta$ [deg]')
+            axis.set_ylabel(r'$\xi(\theta)$')
+            axis.grid(True, alpha=0.25)
+            axis.legend(frameon=False)
 
     fig.suptitle('Observed-Sky First-Step Correlations', fontsize=18)
     fig.tight_layout()
@@ -172,6 +181,13 @@ def main() -> None:
     parser.add_argument('--source-e2-col', default='e2', help='UNIONS e2 column.')
     parser.add_argument('--output-dir', default='examples/output/first_steps', help='Directory where outputs are written.')
     parser.add_argument('--output-prefix', default='desi_unions_observed', help='Prefix for output files.')
+    parser.add_argument(
+        '--correlations',
+        nargs='+',
+        default=['gg', 'gs', 'ss'],
+        choices=['gg', 'gs', 'ss'],
+        help='Subset of correlations to run.',
+    )
     parser.add_argument('--min-theta', type=float, default=0.1, help='Minimum theta in degrees.')
     parser.add_argument('--max-theta', type=float, default=1.0, help='Maximum theta in degrees.')
     parser.add_argument('--nbins', type=int, default=12, help='Number of angular bins.')
@@ -198,7 +214,9 @@ def main() -> None:
     print('=' * 72)
     print(f'Lenses          : {args.data}')
     print(f'Random catalogs : {len(random_paths)} files')
-    print(f'Sources         : {args.sources}')
+    if any(correlation in args.correlations for correlation in ['gs', 'ss']):
+        print(f'Sources         : {args.sources}')
+    print(f'Correlations    : {", ".join(args.correlations)}')
     print(f'Theta range     : [{args.min_theta:.4f}, {args.max_theta:.2f}] deg')
     print('=' * 72)
 
@@ -207,64 +225,70 @@ def main() -> None:
     lens_particles = create_particles(lenses.ra, lenses.dec, lenses.weights)
     print(f'  Kept {lenses.size:,} lenses')
 
-    print('\nLoading UNIONS sources...')
-    sources = load_unions_catalog(
-        args.sources,
-        max_rows=args.max_sources,
-        seed=args.seed + 100,
-        weight_col=args.source_weight_col,
-        e1_col=args.source_e1_col,
-        e2_col=args.source_e2_col,
-    )
-    source_particles = create_particles(sources.ra, sources.dec, sources.weights, shear=(sources.e1, sources.e2))
-    source_scalar_particles = create_particles(sources.ra, sources.dec, sources.weights)
-    print(f'  Kept {sources.size:,} sources')
+    source_particles = None
+    source_scalar_particles = None
+    if any(correlation in args.correlations for correlation in ['gs', 'ss']):
+        print('\nLoading UNIONS sources...')
+        sources = load_unions_catalog(
+            args.sources,
+            max_rows=args.max_sources,
+            seed=args.seed + 100,
+            weight_col=args.source_weight_col,
+            e1_col=args.source_e1_col,
+            e2_col=args.source_e2_col,
+        )
+        source_particles = create_particles(sources.ra, sources.dec, sources.weights, shear=(sources.e1, sources.e2))
+        source_scalar_particles = create_particles(sources.ra, sources.dec, sources.weights)
+        print(f'  Kept {sources.size:,} sources')
 
     results: dict[str, np.ndarray] = {}
 
-    print('\nComputing xi_gg(theta)...')
-    t0 = time.time()
-    results['xi_gg'] = compute_wgg(
-        lenses,
-        lens_particles,
-        random_paths,
-        battrs,
-        max_random_rows=args.max_random_rows,
-        seed=args.seed + 200,
-        nthreads=args.nthreads,
-    )
-    print(f'  Completed in {time.time() - t0:.2f} s')
+    if 'gg' in args.correlations:
+        print('\nComputing xi_gg(theta)...')
+        t0 = time.time()
+        results['xi_gg'] = compute_wgg(
+            lenses,
+            lens_particles,
+            random_paths,
+            battrs,
+            max_random_rows=args.max_random_rows,
+            seed=args.seed + 200,
+            nthreads=args.nthreads,
+        )
+        print(f'  Completed in {time.time() - t0:.2f} s')
 
-    print('\nComputing xi_g+(theta) and xi_gx(theta)...')
-    t0 = time.time()
-    results['xi_g_plus'], results['xi_g_cross'] = compute_gplus(
-        lens_particles,
-        source_particles,
-        source_scalar_particles,
-        random_paths,
-        battrs,
-        max_random_rows=args.max_random_rows,
-        seed=args.seed + 400,
-        nthreads=args.nthreads,
-    )
-    print(f'  Completed in {time.time() - t0:.2f} s')
+    if 'gs' in args.correlations:
+        print('\nComputing xi_g+(theta) and xi_gx(theta)...')
+        t0 = time.time()
+        results['xi_g_plus'], results['xi_g_cross'] = compute_gplus(
+            lens_particles,
+            source_particles,
+            source_scalar_particles,
+            random_paths,
+            battrs,
+            max_random_rows=args.max_random_rows,
+            seed=args.seed + 400,
+            nthreads=args.nthreads,
+        )
+        print(f'  Completed in {time.time() - t0:.2f} s')
 
-    print('\nComputing xi_++(theta), xi_+x(theta), and xi_xx(theta)...')
-    t0 = time.time()
-    results['xi_plus_plus'], results['xi_plus_cross'], results['xi_cross_cross'] = compute_xi_spin_spin(
-        source_particles,
-        source_scalar_particles,
-        battrs,
-        nthreads=args.nthreads,
-    )
-    print(f'  Completed in {time.time() - t0:.2f} s')
+    if 'ss' in args.correlations:
+        print('\nComputing xi_++(theta), xi_+x(theta), and xi_xx(theta)...')
+        t0 = time.time()
+        results['xi_plus_plus'], results['xi_plus_cross'], results['xi_cross_cross'] = compute_xi_spin_spin(
+            source_particles,
+            source_scalar_particles,
+            battrs,
+            nthreads=args.nthreads,
+        )
+        print(f'  Completed in {time.time() - t0:.2f} s')
 
     results_path = output_dir / f'{args.output_prefix}_results.npz'
     np.savez(results_path, theta_edges=theta_edges, theta_centers=theta_centers, **results)
     print(f'\nSaved arrays to {results_path}')
 
     figure_path = output_dir / f'{args.output_prefix}_summary.png'
-    plot_results(theta_centers, results, figure_path)
+    plot_results(theta_centers, results, args.correlations, figure_path)
     print(f'Saved figure to {figure_path}')
 
 
