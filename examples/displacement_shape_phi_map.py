@@ -21,6 +21,7 @@ import argparse
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+from matplotlib.collections import LineCollection
 import numpy as np
 
 from cucount.numpy import BinAttrs, WeightAttrs, count2, setup_logging
@@ -183,6 +184,110 @@ def plot_single_map(
     plt.close(fig)
 
 
+def shear_components_to_xy(
+    gamma_plus: np.ndarray,
+    gamma_cross: np.ndarray,
+    phi_centers_deg: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    phi = np.deg2rad(np.asarray(phi_centers_deg, dtype=np.float64))[None, :]
+    cos2phi = np.cos(2.0 * phi)
+    sin2phi = np.sin(2.0 * phi)
+    gamma1 = -gamma_plus * cos2phi + gamma_cross * sin2phi
+    gamma2 = -gamma_plus * sin2phi - gamma_cross * cos2phi
+    return gamma1, gamma2
+
+
+def make_shear_segments(
+    theta_edges: np.ndarray,
+    phi_edges: np.ndarray,
+    gamma_plus: np.ndarray,
+    gamma_cross: np.ndarray,
+) -> list[np.ndarray]:
+    theta_centers = 0.5 * (theta_edges[:-1] + theta_edges[1:])
+    phi_centers = 0.5 * (phi_edges[:-1] + phi_edges[1:])
+    theta_step = max(gamma_plus.shape[0] // 16, 1)
+    phi_step = max(gamma_plus.shape[1] // 18, 1)
+
+    theta_sample = theta_centers[::theta_step]
+    phi_sample = phi_centers[::phi_step]
+    gamma_plus_sample = np.asarray(gamma_plus[::theta_step, ::phi_step], dtype=np.float64)
+    gamma_cross_sample = np.asarray(gamma_cross[::theta_step, ::phi_step], dtype=np.float64)
+    gamma1, gamma2 = shear_components_to_xy(gamma_plus_sample, gamma_cross_sample, phi_sample)
+
+    theta_grid, phi_grid = np.meshgrid(theta_sample, np.deg2rad(phi_sample), indexing='ij')
+    x = theta_grid * np.cos(phi_grid)
+    y = theta_grid * np.sin(phi_grid)
+
+    amplitude = np.hypot(gamma1, gamma2)
+    finite = np.isfinite(x) & np.isfinite(y) & np.isfinite(amplitude) & (amplitude > 0.0)
+    if not np.any(finite):
+        return []
+
+    max_amplitude = float(np.nanmax(amplitude[finite]))
+    if max_amplitude <= 0.0:
+        return []
+
+    angle = 0.5 * np.arctan2(gamma2, gamma1)
+    half_length = 0.03 * float(theta_edges[-1]) * amplitude / max_amplitude
+
+    x0 = x - half_length * np.cos(angle)
+    x1 = x + half_length * np.cos(angle)
+    y0 = y - half_length * np.sin(angle)
+    y1 = y + half_length * np.sin(angle)
+
+    segments = [
+        np.array([[x_start, y_start], [x_stop, y_stop]], dtype=np.float64)
+        for x_start, y_start, x_stop, y_stop, keep in zip(
+            x0.ravel(),
+            y0.ravel(),
+            x1.ravel(),
+            y1.ravel(),
+            finite.ravel(),
+            strict=False,
+        )
+        if keep
+    ]
+    return segments
+
+
+def plot_smoothed_maps_with_shear_field(
+    theta_edges: np.ndarray,
+    phi_edges: np.ndarray,
+    gamma_plus_smoothed: np.ndarray,
+    gamma_cross_smoothed: np.ndarray,
+    output_path: Path,
+) -> None:
+    theta_grid, phi_grid = np.meshgrid(theta_edges, np.deg2rad(phi_edges), indexing='ij')
+    x = theta_grid * np.cos(phi_grid)
+    y = theta_grid * np.sin(phi_grid)
+    segments = make_shear_segments(theta_edges, phi_edges, gamma_plus_smoothed, gamma_cross_smoothed)
+
+    figures = [
+        (gamma_plus_smoothed, r'Smoothed $\gamma_+(x, y)$', r'$\gamma_+$'),
+        (gamma_cross_smoothed, r'Smoothed $\gamma_\times(x, y)$', r'$\gamma_\times$'),
+    ]
+    fig, axes = plt.subplots(1, 2, figsize=(13.0, 5.6), constrained_layout=True)
+    for axis, (values, title, colorbar_label) in zip(axes, figures, strict=False):
+        vmax = float(np.nanmax(np.abs(values)))
+        if not np.isfinite(vmax) or vmax == 0.0:
+            vmax = 1.0
+        pcm = axis.pcolormesh(x, y, values, shading='auto', cmap='coolwarm', vmin=-vmax, vmax=vmax)
+        if segments:
+            axis.add_collection(LineCollection(segments, colors='white', linewidths=2.0, alpha=0.7, zorder=3))
+            axis.add_collection(LineCollection(segments, colors='black', linewidths=1.0, alpha=0.9, zorder=4))
+        axis.axhline(0.0, color='0.7', linewidth=1.0)
+        axis.axvline(0.0, color='0.7', linewidth=1.0)
+        axis.set_aspect('equal', adjustable='box')
+        axis.set_title(title)
+        axis.set_xlabel(r'$x_{+\mathrm{disp}} = \theta \cos \phi$ [deg]')
+        axis.set_ylabel(r'$y_{\perp} = \theta \sin \phi$ [deg]')
+        fig.colorbar(pcm, ax=axis, label=colorbar_label)
+
+    fig.suptitle('Gaussian-smoothed maps with shear field overlay')
+    fig.savefig(output_path, dpi=180)
+    plt.close(fig)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description='Measure gamma_+ and gamma_x around the local displacement direction and project them to x/y.',
@@ -323,6 +428,7 @@ def main() -> None:
     cross_path = output_dir / f'{args.output_prefix}_gamma_cross_xy.png'
     plus_smoothed_path = output_dir / f'{args.output_prefix}_gamma_plus_xy_smoothed.png'
     cross_smoothed_path = output_dir / f'{args.output_prefix}_gamma_cross_xy_smoothed.png'
+    overlay_path = output_dir / f'{args.output_prefix}_smoothed_shear_field_overlay.png'
     plot_single_map(theta_edges, phi_edges, gamma_plus, r'$\gamma_+(x, y)$', r'$\gamma_+$', plus_path)
     plot_single_map(theta_edges, phi_edges, gamma_cross, r'$\gamma_\times(x, y)$', r'$\gamma_\times$', cross_path)
     plot_single_map(
@@ -341,10 +447,18 @@ def main() -> None:
         r'$\gamma_\times$',
         cross_smoothed_path,
     )
+    plot_smoothed_maps_with_shear_field(
+        theta_edges,
+        phi_edges,
+        gamma_plus_smoothed,
+        gamma_cross_smoothed,
+        overlay_path,
+    )
     print(f'Saved gamma_+ map to {plus_path}')
     print(f'Saved gamma_x map to {cross_path}')
     print(f'Saved smoothed gamma_+ map to {plus_smoothed_path}')
     print(f'Saved smoothed gamma_x map to {cross_smoothed_path}')
+    print(f'Saved smoothed shear-field overlay to {overlay_path}')
 
 
 if __name__ == '__main__':
