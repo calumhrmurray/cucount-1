@@ -15,8 +15,10 @@ The projected pair-frame outputs are the weighted pair averages of:
     <gamma_x d_parallel>(s, mu)
     <gamma_x d_perp>(s, mu)
 
-Displacement components are left in their catalogue units (typically arcsec),
-so the correlations have units of displacement.
+By default the displacement components are left in their catalogue units
+(typically arcsec), so the correlations have units of displacement. Pass
+`--normalize-displacement` to project onto unit sky-plane displacement vectors
+while preserving direction.
 """
 
 from __future__ import annotations
@@ -60,6 +62,14 @@ def mask_nonzero_displacements(
         dalpha_cosdec_arcsec[mask],
         ddec_arcsec[mask],
     )
+
+
+def normalize_displacements(
+    dalpha_cosdec_arcsec: np.ndarray,
+    ddec_arcsec: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    amplitude = np.hypot(dalpha_cosdec_arcsec, ddec_arcsec)
+    return dalpha_cosdec_arcsec / amplitude, ddec_arcsec / amplitude
 
 
 def compute_shape_displacement_correlations(
@@ -126,6 +136,7 @@ def plot_smu_summary(
     s_edges: np.ndarray,
     mu_edges: np.ndarray,
     correlations: dict[str, np.ndarray],
+    colorbar_label: str,
     output_path: Path,
 ) -> None:
     s_grid, mu_grid = np.meshgrid(s_edges, mu_edges, indexing='ij')
@@ -147,7 +158,7 @@ def plot_smu_summary(
         axis.set_title(title)
         axis.set_xlabel(r'$s$ [$h^{-1}$ Mpc]')
         axis.set_ylabel(r'$\mu$')
-        fig.colorbar(pcm, ax=axis, label='correlation [arcsec]')
+        fig.colorbar(pcm, ax=axis, label=colorbar_label)
 
     fig.savefig(output_path, dpi=180)
     plt.close(fig)
@@ -181,6 +192,11 @@ def main() -> None:
     parser.add_argument('--s-bins', type=int, default=48, help='Number of separation bins.')
     parser.add_argument('--mu-bins', type=int, default=40, help='Number of mu bins over [-1, 1].')
     parser.add_argument('--los', default=DEFAULT_LOS, choices=['midpoint', 'firstpoint', 'endpoint', 'x', 'y', 'z'], help='Line-of-sight definition for mu.')
+    parser.add_argument(
+        '--normalize-displacement',
+        action='store_true',
+        help='Normalize each non-zero sky-plane displacement vector to unit length before building the spin-1 field.',
+    )
     parser.add_argument('--max-data-rows', type=int, default=None, help='Optional cap on displacement-catalog rows.')
     parser.add_argument('--max-shape-rows', type=int, default=None, help='Optional cap on shape-catalog rows.')
     parser.add_argument('--seed', type=int, default=1234, help='Seed for reproducible sub-sampling.')
@@ -207,6 +223,7 @@ def main() -> None:
     print(f's bins            : {args.s_bins}')
     print(f'mu bins           : {args.mu_bins}')
     print(f'LOS               : {args.los}')
+    print(f'Displacement mode : {"unit direction vectors" if args.normalize_displacement else "catalog displacement amplitudes"}')
     print(f'Distance model    : {distance_label}')
     print(f'Mesh refine       : {args.mesh_refine:.2f}')
     print('=' * 72)
@@ -217,6 +234,8 @@ def main() -> None:
         seed=args.seed,
     )
     data, dalpha_cosdec_arcsec, ddec_arcsec = mask_nonzero_displacements(data, dalpha_cosdec_arcsec, ddec_arcsec)
+    if args.normalize_displacement:
+        dalpha_cosdec_arcsec, ddec_arcsec = normalize_displacements(dalpha_cosdec_arcsec, ddec_arcsec)
     print(f'Loaded {data.size:,} displacement tracers with non-zero displacement')
 
     shapes = load_unions_catalog(
@@ -264,17 +283,20 @@ def main() -> None:
     )
 
     results_path = output_dir / f'{args.output_prefix}_results.npz'
+    colorbar_label = 'correlation [dimensionless]' if args.normalize_displacement else 'correlation [arcsec]'
     np.savez(
         results_path,
         s_edges=s_edges,
         mu_edges=mu_edges,
         los=args.los,
+        normalize_displacement=args.normalize_displacement,
+        displacement_units='unit_vector' if args.normalize_displacement else 'arcsec',
         **correlations,
     )
     print(f'Saved results to {results_path}')
 
     summary_path = output_dir / f'{args.output_prefix}_smu_summary.png'
-    plot_smu_summary(s_edges, mu_edges, correlations, summary_path)
+    plot_smu_summary(s_edges, mu_edges, correlations, colorbar_label, summary_path)
     print(f'Saved summary figure to {summary_path}')
 
     single_figures = {
@@ -295,7 +317,7 @@ def main() -> None:
             mu_edges,
             correlations[key],
             titles[key],
-            'correlation [arcsec]',
+            colorbar_label,
             output_path,
         )
         print(f'Saved {key} map to {output_path}')

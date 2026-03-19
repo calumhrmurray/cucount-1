@@ -34,7 +34,9 @@ def load_results_plotting_module(path: Path):
     return module
 
 
-def load_displacement_shape_results(path: Path) -> tuple[np.ndarray, np.ndarray, dict[str, np.ndarray]]:
+def load_displacement_shape_results(
+    path: Path,
+) -> tuple[np.ndarray, np.ndarray, dict[str, np.ndarray], dict[str, object]]:
     with np.load(path) as data:
         s_edges = np.asarray(data['s_edges'], dtype=np.float64)
         mu_edges = np.asarray(data['mu_edges'], dtype=np.float64)
@@ -44,7 +46,11 @@ def load_displacement_shape_results(path: Path) -> tuple[np.ndarray, np.ndarray,
             'gamma_cross_d_parallel': np.asarray(data['gamma_cross_d_parallel'], dtype=np.float64),
             'gamma_cross_d_perp': np.asarray(data['gamma_cross_d_perp'], dtype=np.float64),
         }
-    return s_edges, mu_edges, components
+        metadata = {
+            'normalize_displacement': bool(data['normalize_displacement']) if 'normalize_displacement' in data else False,
+            'displacement_units': str(data['displacement_units']) if 'displacement_units' in data else 'arcsec',
+        }
+    return s_edges, mu_edges, components, metadata
 
 
 def plot_single_rppi_map(
@@ -52,6 +58,7 @@ def plot_single_rppi_map(
     pi_edges: np.ndarray,
     values: np.ndarray,
     title: str,
+    colorbar_label: str,
     output_path: Path,
     n_levels: int = 10,
 ) -> None:
@@ -92,7 +99,7 @@ def plot_single_rppi_map(
     ax.set_title(title)
     ax.set_aspect('equal')
     ax.grid(True, alpha=0.3, color='white', linewidth=0.5)
-    fig.colorbar(image, ax=ax, label='correlation [arcsec]')
+    fig.colorbar(image, ax=ax, label=colorbar_label)
     fig.savefig(output_path, dpi=180)
     plt.close(fig)
 
@@ -101,6 +108,7 @@ def plot_summary_rppi(
     rp_edges: np.ndarray,
     pi_edges: np.ndarray,
     components: dict[str, np.ndarray],
+    colorbar_label: str,
     output_path: Path,
     n_levels: int = 10,
 ) -> None:
@@ -150,7 +158,7 @@ def plot_summary_rppi(
         axis.set_title(titles[key])
         axis.set_aspect('equal')
         axis.grid(True, alpha=0.3, color='white', linewidth=0.5)
-        fig.colorbar(image, ax=axis, label='correlation [arcsec]')
+        fig.colorbar(image, ax=axis, label=colorbar_label)
 
     fig.savefig(output_path, dpi=180)
     plt.close(fig)
@@ -208,7 +216,8 @@ def main() -> None:
         output_prefix = input_path.stem.removesuffix('_results')
 
     results_plotting = load_results_plotting_module(args.results_plotting)
-    s_edges, mu_edges, components = load_displacement_shape_results(input_path)
+    s_edges, mu_edges, components, metadata = load_displacement_shape_results(input_path)
+    colorbar_label = 'correlation [dimensionless]' if metadata['normalize_displacement'] else 'correlation [arcsec]'
 
     projected_components: dict[str, np.ndarray] = {}
     rp_edges = None
@@ -228,12 +237,14 @@ def main() -> None:
         rp_edges=rp_edges,
         pi_edges=pi_edges,
         smooth_sigma=args.smooth_sigma,
+        normalize_displacement=metadata['normalize_displacement'],
+        displacement_units=metadata['displacement_units'],
         **projected_components,
     )
     print(f'Saved projected results to {projected_path}')
 
     summary_path = output_dir / f'{output_prefix}_rp_pi_summary.png'
-    plot_summary_rppi(rp_edges, pi_edges, projected_components, summary_path, n_levels=args.n_levels)
+    plot_summary_rppi(rp_edges, pi_edges, projected_components, colorbar_label, summary_path, n_levels=args.n_levels)
     print(f'Saved projected summary figure to {summary_path}')
 
     titles = {
@@ -244,7 +255,7 @@ def main() -> None:
     }
     for key, values in projected_components.items():
         output_path = output_dir / f'{output_prefix}_{key}_rp_pi.png'
-        plot_single_rppi_map(rp_edges, pi_edges, values, titles[key], output_path, n_levels=args.n_levels)
+        plot_single_rppi_map(rp_edges, pi_edges, values, titles[key], colorbar_label, output_path, n_levels=args.n_levels)
         print(f'Saved {key} projected map to {output_path}')
 
 
