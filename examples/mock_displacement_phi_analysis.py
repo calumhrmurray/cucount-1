@@ -158,7 +158,7 @@ def run_stage(
     stage: str,
     data_path: str,
     randoms_path: str,
-    theta_edges: np.ndarray,
+    transverse_edges: np.ndarray,
     phi_edges: np.ndarray,
     output_dir: Path,
     max_data_rows: int | None,
@@ -168,15 +168,23 @@ def run_stage(
     nthreads: int,
     smooth_sigma_theta_bins: float,
     smooth_sigma_phi_bins: float,
+    transverse_bin: str,
     pi_max: float | None,
     distance_to_comoving,
 ) -> None:
     pi_edges = None
     if pi_max is not None:
         pi_edges = np.array([-pi_max, pi_max], dtype=np.float64)
-        battrs = BinAttrs(theta=theta_edges, phi=phi_edges, pi=(pi_edges, DEFAULT_PI_LOS))
+    if transverse_bin == 'rp':
+        if pi_edges is None:
+            battrs = BinAttrs(rp=(transverse_edges, DEFAULT_PI_LOS), phi=phi_edges)
+        else:
+            battrs = BinAttrs(rp=(transverse_edges, DEFAULT_PI_LOS), phi=phi_edges, pi=(pi_edges, DEFAULT_PI_LOS))
     else:
-        battrs = BinAttrs(theta=theta_edges, phi=phi_edges)
+        if pi_edges is None:
+            battrs = BinAttrs(theta=transverse_edges, phi=phi_edges)
+        else:
+            battrs = BinAttrs(theta=transverse_edges, phi=phi_edges, pi=(pi_edges, DEFAULT_PI_LOS))
     sample, d_east, d_north = load_mock_stage(data_path, stage=stage, max_rows=max_data_rows, seed=seed)
     unit_north = d_north / np.hypot(d_north, d_east)
     unit_east = d_east / np.hypot(d_north, d_east)
@@ -235,18 +243,30 @@ def run_stage(
     mean_cross = collapse_single_pi_bin(mean_cross)
     density_results_path = stage_dir / f'tfc_mock_{stage}_displacement_density_results.npz'
     density_payload = {
-        'theta_edges': theta_edges,
         'phi_edges': phi_edges,
         'xi_density': xi_density,
         'mean_plus': mean_plus,
         'mean_cross': mean_cross,
+        'transverse_bin': transverse_bin,
     }
+    if transverse_bin == 'rp':
+        density_payload['rp_edges'] = transverse_edges
+    else:
+        density_payload['theta_edges'] = transverse_edges
     if pi_edges is not None:
         density_payload['pi_edges'] = pi_edges
         density_payload['pi_los'] = DEFAULT_PI_LOS
     np.savez(density_results_path, **density_payload)
     density_figure_path = stage_dir / f'tfc_mock_{stage}_displacement_density_xy.png'
-    plot_xy_map(theta_edges, phi_edges, xi_density, mean_plus, mean_cross, density_figure_path)
+    plot_xy_map(
+        transverse_edges,
+        phi_edges,
+        xi_density,
+        mean_plus,
+        mean_cross,
+        density_figure_path,
+        transverse_bin=transverse_bin,
+    )
     print(f'  Saved density results to {density_results_path}')
 
     gamma_plus, gamma_cross = compute_shape_maps(
@@ -264,7 +284,6 @@ def run_stage(
 
     shape_results_path = stage_dir / f'tfc_mock_{stage}_displacement_shape_results.npz'
     shape_payload = {
-        'theta_edges': theta_edges,
         'phi_edges': phi_edges,
         'gamma_plus': gamma_plus,
         'gamma_cross': gamma_cross,
@@ -272,7 +291,12 @@ def run_stage(
         'gamma_cross_smoothed': gamma_cross_smoothed,
         'smooth_sigma_theta_bins': smooth_sigma_theta_bins,
         'smooth_sigma_phi_bins': smooth_sigma_phi_bins,
+        'transverse_bin': transverse_bin,
     }
+    if transverse_bin == 'rp':
+        shape_payload['rp_edges'] = transverse_edges
+    else:
+        shape_payload['theta_edges'] = transverse_edges
     if pi_edges is not None:
         shape_payload['pi_edges'] = pi_edges
         shape_payload['pi_los'] = DEFAULT_PI_LOS
@@ -283,30 +307,33 @@ def run_stage(
     cross_smoothed_path = stage_dir / f'tfc_mock_{stage}_displacement_shape_gamma_cross_xy_smoothed.png'
     overlay_path = stage_dir / f'tfc_mock_{stage}_displacement_shape_smoothed_shear_field_overlay.png'
 
-    plot_single_map(theta_edges, phi_edges, gamma_plus, r'$\gamma_+(x, y)$', r'$\gamma_+$', plus_path)
-    plot_single_map(theta_edges, phi_edges, gamma_cross, r'$\gamma_\times(x, y)$', r'$\gamma_\times$', cross_path)
+    plot_single_map(transverse_edges, phi_edges, gamma_plus, r'$\gamma_+(x, y)$', r'$\gamma_+$', plus_path, transverse_bin=transverse_bin)
+    plot_single_map(transverse_edges, phi_edges, gamma_cross, r'$\gamma_\times(x, y)$', r'$\gamma_\times$', cross_path, transverse_bin=transverse_bin)
     plot_single_map(
-        theta_edges,
+        transverse_edges,
         phi_edges,
         gamma_plus_smoothed,
         r'$\gamma_+(x, y)$ Gaussian-smoothed',
         r'$\gamma_+$',
         plus_smoothed_path,
+        transverse_bin=transverse_bin,
     )
     plot_single_map(
-        theta_edges,
+        transverse_edges,
         phi_edges,
         gamma_cross_smoothed,
         r'$\gamma_\times(x, y)$ Gaussian-smoothed',
         r'$\gamma_\times$',
         cross_smoothed_path,
+        transverse_bin=transverse_bin,
     )
     plot_smoothed_maps_with_shear_field(
-        theta_edges,
+        transverse_edges,
         phi_edges,
         gamma_plus_smoothed,
         gamma_cross_smoothed,
         overlay_path,
+        transverse_bin=transverse_bin,
     )
     print(f'  Saved shape results to {shape_results_path}')
 
@@ -326,9 +353,13 @@ def main() -> None:
         help='Mock stages to analyse.',
     )
     parser.add_argument('--output-dir', default='examples/output/mock_displacement_phi', help='Directory for outputs.')
+    parser.add_argument('--transverse-bin', default='theta', choices=['theta', 'rp'], help='Use angular theta bins or projected-separation rp bins.')
     parser.add_argument('--min-theta', type=float, default=0.05, help='Minimum theta in degrees.')
     parser.add_argument('--max-theta', type=float, default=2.0, help='Maximum theta in degrees.')
     parser.add_argument('--theta-bins', type=int, default=32, help='Number of theta bins.')
+    parser.add_argument('--min-rp', type=float, default=0.2, help='Minimum projected separation rp in h^-1 Mpc.')
+    parser.add_argument('--max-rp', type=float, default=40.0, help='Maximum projected separation rp in h^-1 Mpc.')
+    parser.add_argument('--rp-bins', type=int, default=32, help='Number of rp bins.')
     parser.add_argument('--phi-bins', type=int, default=72, help='Number of phi bins over [0, 360) degrees.')
     parser.add_argument('--pi-max', type=float, default=None, help='If set, keep only pairs with |pi| <= this value in h^-1 Mpc using the first-point LOS.')
     parser.add_argument('--max-data-rows', type=int, default=None, help='Optional cap on mock-galaxy rows.')
@@ -346,11 +377,16 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     theta_edges = np.linspace(args.min_theta, args.max_theta, args.theta_bins + 1)
+    rp_edges = np.linspace(args.min_rp, args.max_rp, args.rp_bins + 1)
     phi_edges = np.linspace(0.0, 360.0, args.phi_bins + 1)
     distance_to_comoving = None
     distance_label = None
-    if args.pi_max is not None:
+    if (args.transverse_bin == 'rp') or (args.pi_max is not None):
         distance_to_comoving, distance_label = build_distance_to_comoving()
+    if args.transverse_bin == 'rp':
+        transverse_edges = rp_edges
+    else:
+        transverse_edges = theta_edges
 
     print('=' * 72)
     print('Mock displacement x density / shape phi-analysis')
@@ -358,8 +394,15 @@ def main() -> None:
     print(f'Mock data        : {args.data}')
     print(f'Mock randoms     : {args.randoms}')
     print(f'Stages           : {", ".join(args.stages)}')
+    if args.transverse_bin == 'rp':
+        print(f'rp range         : [{args.min_rp:.3f}, {args.max_rp:.3f}] h^-1 Mpc')
+        print(f'rp bins          : {args.rp_bins}')
+    else:
+        print(f'Theta range      : [{args.min_theta:.3f}, {args.max_theta:.3f}] deg')
+        print(f'Theta bins       : {args.theta_bins}')
     if args.pi_max is not None:
         print(f'Pi cut           : [-{args.pi_max:.1f}, {args.pi_max:.1f}] h^-1 Mpc ({DEFAULT_PI_LOS} LOS)')
+    if distance_label is not None:
         print(f'Distance model   : {distance_label}')
     print(f'Mesh refine      : {args.mesh_refine:.2f}')
     print('Displacement use : initial/final use total displacement; formation uses formation-initial displacement')
@@ -370,7 +413,7 @@ def main() -> None:
             stage=stage,
             data_path=args.data,
             randoms_path=args.randoms,
-            theta_edges=theta_edges,
+            transverse_edges=transverse_edges,
             phi_edges=phi_edges,
             output_dir=output_dir,
             max_data_rows=args.max_data_rows,
@@ -380,6 +423,7 @@ def main() -> None:
             nthreads=args.nthreads,
             smooth_sigma_theta_bins=args.smooth_sigma_theta_bins,
             smooth_sigma_phi_bins=args.smooth_sigma_phi_bins,
+            transverse_bin=args.transverse_bin,
             pi_max=args.pi_max,
             distance_to_comoving=distance_to_comoving,
         )

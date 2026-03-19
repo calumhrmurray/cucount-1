@@ -168,21 +168,35 @@ def collapse_single_pi_bin(values: np.ndarray) -> np.ndarray:
     raise ValueError(f'Expected a 2D map or a single pi bin, got shape {values.shape}')
 
 
+def get_xy_axis_labels(transverse_bin: str) -> tuple[str, str]:
+    if transverse_bin == 'rp':
+        return (
+            r'$x_{+\mathrm{disp}} = r_p \cos \phi$ [$h^{-1}$ Mpc]',
+            r'$y_{\perp} = r_p \sin \phi$ [$h^{-1}$ Mpc]',
+        )
+    return (
+        r'$x_{+\mathrm{disp}} = \theta \cos \phi$ [deg]',
+        r'$y_{\perp} = \theta \sin \phi$ [deg]',
+    )
+
+
 def plot_single_map(
-    theta_edges: np.ndarray,
+    transverse_edges: np.ndarray,
     phi_edges: np.ndarray,
     values: np.ndarray,
     title: str,
     colorbar_label: str,
     output_path: Path,
+    transverse_bin: str = 'theta',
 ) -> None:
-    theta_grid, phi_grid = np.meshgrid(theta_edges, np.deg2rad(phi_edges), indexing='ij')
-    x = theta_grid * np.cos(phi_grid)
-    y = theta_grid * np.sin(phi_grid)
+    transverse_grid, phi_grid = np.meshgrid(transverse_edges, np.deg2rad(phi_edges), indexing='ij')
+    x = transverse_grid * np.cos(phi_grid)
+    y = transverse_grid * np.sin(phi_grid)
 
     vmax = float(np.nanmax(np.abs(values)))
     if not np.isfinite(vmax) or vmax == 0.0:
         vmax = 1.0
+    xlabel, ylabel = get_xy_axis_labels(transverse_bin)
 
     fig, ax = plt.subplots(figsize=(6.5, 5.5), constrained_layout=True)
     pcm = ax.pcolormesh(x, y, values, shading='auto', cmap='coolwarm', vmin=-vmax, vmax=vmax)
@@ -190,8 +204,8 @@ def plot_single_map(
     ax.axvline(0.0, color='0.7', linewidth=1.0)
     ax.set_aspect('equal', adjustable='box')
     ax.set_title(title)
-    ax.set_xlabel(r'$x_{+\mathrm{disp}} = \theta \cos \phi$ [deg]')
-    ax.set_ylabel(r'$y_{\perp} = \theta \sin \phi$ [deg]')
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
     fig.colorbar(pcm, ax=ax, label=colorbar_label)
     fig.savefig(output_path, dpi=180)
     plt.close(fig)
@@ -211,18 +225,18 @@ def shear_components_to_xy(
 
 
 def make_shear_segments(
-    theta_edges: np.ndarray,
+    transverse_edges: np.ndarray,
     phi_edges: np.ndarray,
     gamma_plus: np.ndarray,
     gamma_cross: np.ndarray,
     normalize_lengths: bool = False,
 ) -> list[np.ndarray]:
-    theta_centers = 0.5 * (theta_edges[:-1] + theta_edges[1:])
+    transverse_centers = 0.5 * (transverse_edges[:-1] + transverse_edges[1:])
     phi_centers = 0.5 * (phi_edges[:-1] + phi_edges[1:])
     theta_step = max(gamma_plus.shape[0] // 16, 1)
     phi_step = max(gamma_plus.shape[1] // 18, 1)
 
-    theta_sample = theta_centers[::theta_step]
+    theta_sample = transverse_centers[::theta_step]
     phi_sample = phi_centers[::phi_step]
     gamma_plus_sample = np.asarray(gamma_plus[::theta_step, ::phi_step], dtype=np.float64)
     gamma_cross_sample = np.asarray(gamma_cross[::theta_step, ::phi_step], dtype=np.float64)
@@ -240,12 +254,12 @@ def make_shear_segments(
     angle = 0.5 * np.arctan2(gamma2, gamma1)
     if normalize_lengths:
         # Show orientation only, with a fixed stick length across the field.
-        half_length = 0.03 * float(theta_edges[-1])
+        half_length = 0.03 * float(transverse_edges[-1])
     else:
         max_amplitude = float(np.nanmax(amplitude[finite]))
         if max_amplitude <= 0.0:
             return []
-        half_length = 0.03 * float(theta_edges[-1]) * amplitude / max_amplitude
+        half_length = 0.03 * float(transverse_edges[-1]) * amplitude / max_amplitude
 
     x0 = x - half_length * np.cos(angle)
     x1 = x + half_length * np.cos(angle)
@@ -268,22 +282,24 @@ def make_shear_segments(
 
 
 def plot_smoothed_maps_with_shear_field(
-    theta_edges: np.ndarray,
+    transverse_edges: np.ndarray,
     phi_edges: np.ndarray,
     gamma_plus_smoothed: np.ndarray,
     gamma_cross_smoothed: np.ndarray,
     output_path: Path,
+    transverse_bin: str = 'theta',
 ) -> None:
-    theta_grid, phi_grid = np.meshgrid(theta_edges, np.deg2rad(phi_edges), indexing='ij')
+    theta_grid, phi_grid = np.meshgrid(transverse_edges, np.deg2rad(phi_edges), indexing='ij')
     x = theta_grid * np.cos(phi_grid)
     y = theta_grid * np.sin(phi_grid)
     segments = make_shear_segments(
-        theta_edges,
+        transverse_edges,
         phi_edges,
         gamma_plus_smoothed,
         gamma_cross_smoothed,
         normalize_lengths=True,
     )
+    xlabel, ylabel = get_xy_axis_labels(transverse_bin)
 
     figures = [
         (gamma_plus_smoothed, r'Smoothed $\gamma_+(x, y)$', r'$\gamma_+$'),
@@ -302,8 +318,8 @@ def plot_smoothed_maps_with_shear_field(
         axis.axvline(0.0, color='0.7', linewidth=1.0)
         axis.set_aspect('equal', adjustable='box')
         axis.set_title(title)
-        axis.set_xlabel(r'$x_{+\mathrm{disp}} = \theta \cos \phi$ [deg]')
-        axis.set_ylabel(r'$y_{\perp} = \theta \sin \phi$ [deg]')
+        axis.set_xlabel(xlabel)
+        axis.set_ylabel(ylabel)
         fig.colorbar(pcm, ax=axis, label=colorbar_label)
 
     fig.suptitle('Gaussian-smoothed maps with shear field overlay')
@@ -340,9 +356,13 @@ def main() -> None:
     parser.add_argument('--shape-z-col', default='auto', help='Shape-catalog redshift column to use when --pi-max is set, or auto.')
     parser.add_argument('--output-dir', default='examples/output/displacement_shape_phi', help='Directory for outputs.')
     parser.add_argument('--output-prefix', default='desi_lrg_displacement_shape', help='Output file prefix.')
+    parser.add_argument('--transverse-bin', default='theta', choices=['theta', 'rp'], help='Use angular theta bins or projected-separation rp bins.')
     parser.add_argument('--min-theta', type=float, default=0.05, help='Minimum theta in degrees.')
     parser.add_argument('--max-theta', type=float, default=2.0, help='Maximum theta in degrees.')
     parser.add_argument('--theta-bins', type=int, default=32, help='Number of theta bins.')
+    parser.add_argument('--min-rp', type=float, default=0.2, help='Minimum projected separation rp in h^-1 Mpc.')
+    parser.add_argument('--max-rp', type=float, default=40.0, help='Maximum projected separation rp in h^-1 Mpc.')
+    parser.add_argument('--rp-bins', type=int, default=32, help='Number of rp bins.')
     parser.add_argument('--phi-bins', type=int, default=72, help='Number of phi bins over [0, 360) degrees.')
     parser.add_argument('--pi-max', type=float, default=None, help='If set, keep only pairs with |pi| <= this value in h^-1 Mpc using the first-point LOS.')
     parser.add_argument('--max-data-rows', type=int, default=None, help='Optional cap on displacement-catalog rows.')
@@ -372,16 +392,28 @@ def main() -> None:
     setup_logging(args.log_level)
 
     theta_edges = np.linspace(args.min_theta, args.max_theta, args.theta_bins + 1)
+    rp_edges = np.linspace(args.min_rp, args.max_rp, args.rp_bins + 1)
     phi_edges = np.linspace(0.0, 360.0, args.phi_bins + 1)
     pi_edges = None
     distance_to_comoving = None
     distance_label = None
+    need_distance = (args.transverse_bin == 'rp') or (args.pi_max is not None)
     if args.pi_max is not None:
         pi_edges = np.array([-args.pi_max, args.pi_max], dtype=np.float64)
-        battrs = BinAttrs(theta=theta_edges, phi=phi_edges, pi=(pi_edges, DEFAULT_PI_LOS))
+    if need_distance:
         distance_to_comoving, distance_label = build_distance_to_comoving()
+    if args.transverse_bin == 'rp':
+        if pi_edges is None:
+            battrs = BinAttrs(rp=(rp_edges, DEFAULT_PI_LOS), phi=phi_edges)
+        else:
+            battrs = BinAttrs(rp=(rp_edges, DEFAULT_PI_LOS), phi=phi_edges, pi=(pi_edges, DEFAULT_PI_LOS))
+        transverse_edges = rp_edges
     else:
-        battrs = BinAttrs(theta=theta_edges, phi=phi_edges)
+        if pi_edges is None:
+            battrs = BinAttrs(theta=theta_edges, phi=phi_edges)
+        else:
+            battrs = BinAttrs(theta=theta_edges, phi=phi_edges, pi=(pi_edges, DEFAULT_PI_LOS))
+        transverse_edges = theta_edges
 
     print('=' * 72)
     print('Displacement-shape correlation in displacement-aligned coordinates')
@@ -389,11 +421,16 @@ def main() -> None:
     print(f'Displacement data : {args.data}')
     print(f'Shape catalog     : {args.shapes}')
     print(f'Random catalogs   : {args.randoms_glob}')
-    print(f'Theta range       : [{args.min_theta:.3f}, {args.max_theta:.3f}] deg')
-    print(f'Theta bins        : {args.theta_bins}')
+    if args.transverse_bin == 'rp':
+        print(f'rp range          : [{args.min_rp:.3f}, {args.max_rp:.3f}] h^-1 Mpc')
+        print(f'rp bins           : {args.rp_bins}')
+    else:
+        print(f'Theta range       : [{args.min_theta:.3f}, {args.max_theta:.3f}] deg')
+        print(f'Theta bins        : {args.theta_bins}')
     print(f'Phi bins          : {args.phi_bins}')
     if pi_edges is not None:
         print(f'Pi cut            : [{pi_edges[0]:.1f}, {pi_edges[1]:.1f}] h^-1 Mpc ({DEFAULT_PI_LOS} LOS)')
+    if need_distance:
         print(f'Distance model    : {distance_label}')
     print(f'Mesh refine       : {args.mesh_refine:.2f}')
     print(f'Smoothing sigma   : theta={args.smooth_sigma_theta_bins:.2f} bins, phi={args.smooth_sigma_phi_bins:.2f} bins')
@@ -419,9 +456,9 @@ def main() -> None:
     )
     print(f'Loaded {shapes.size:,} shape tracers')
 
-    if args.pi_max is not None:
+    if need_distance:
         if (data.z is None) or (shapes.z is None):
-            raise ValueError('The pi cut requires redshift columns for both the displacement and shape catalogs')
+            raise ValueError('Projected or pi binning requires redshift columns for both the displacement and shape catalogs')
         data_distance = distance_to_comoving(data.z)
         shape_distance = distance_to_comoving(shapes.z)
     else:
@@ -446,7 +483,7 @@ def main() -> None:
     random_reference_particles_list = []
     for index, random_path in enumerate(random_paths, start=1):
         randoms = load_desi_catalog(random_path, max_rows=args.max_random_rows, seed=args.seed + index)
-        random_distance = None if args.pi_max is None else distance_to_comoving(randoms.z)
+        random_distance = None if not need_distance else distance_to_comoving(randoms.z)
         rand_north, rand_east = sample_reference_spin(unit_north, unit_east, randoms.size, seed=args.seed + 10_000 + index)
         random_reference_particles_list.append(
             create_particles(
@@ -474,7 +511,6 @@ def main() -> None:
 
     results_path = output_dir / f'{args.output_prefix}_results.npz'
     results_payload = {
-        'theta_edges': theta_edges,
         'phi_edges': phi_edges,
         'gamma_plus': gamma_plus,
         'gamma_cross': gamma_cross,
@@ -482,7 +518,12 @@ def main() -> None:
         'gamma_cross_smoothed': gamma_cross_smoothed,
         'smooth_sigma_theta_bins': args.smooth_sigma_theta_bins,
         'smooth_sigma_phi_bins': args.smooth_sigma_phi_bins,
+        'transverse_bin': args.transverse_bin,
     }
+    if args.transverse_bin == 'rp':
+        results_payload['rp_edges'] = rp_edges
+    else:
+        results_payload['theta_edges'] = theta_edges
     if pi_edges is not None:
         results_payload['pi_edges'] = pi_edges
         results_payload['pi_los'] = DEFAULT_PI_LOS
@@ -494,30 +535,33 @@ def main() -> None:
     plus_smoothed_path = output_dir / f'{args.output_prefix}_gamma_plus_xy_smoothed.png'
     cross_smoothed_path = output_dir / f'{args.output_prefix}_gamma_cross_xy_smoothed.png'
     overlay_path = output_dir / f'{args.output_prefix}_smoothed_shear_field_overlay.png'
-    plot_single_map(theta_edges, phi_edges, gamma_plus, r'$\gamma_+(x, y)$', r'$\gamma_+$', plus_path)
-    plot_single_map(theta_edges, phi_edges, gamma_cross, r'$\gamma_\times(x, y)$', r'$\gamma_\times$', cross_path)
+    plot_single_map(transverse_edges, phi_edges, gamma_plus, r'$\gamma_+(x, y)$', r'$\gamma_+$', plus_path, transverse_bin=args.transverse_bin)
+    plot_single_map(transverse_edges, phi_edges, gamma_cross, r'$\gamma_\times(x, y)$', r'$\gamma_\times$', cross_path, transverse_bin=args.transverse_bin)
     plot_single_map(
-        theta_edges,
+        transverse_edges,
         phi_edges,
         gamma_plus_smoothed,
         r'$\gamma_+(x, y)$ Gaussian-smoothed',
         r'$\gamma_+$',
         plus_smoothed_path,
+        transverse_bin=args.transverse_bin,
     )
     plot_single_map(
-        theta_edges,
+        transverse_edges,
         phi_edges,
         gamma_cross_smoothed,
         r'$\gamma_\times(x, y)$ Gaussian-smoothed',
         r'$\gamma_\times$',
         cross_smoothed_path,
+        transverse_bin=args.transverse_bin,
     )
     plot_smoothed_maps_with_shear_field(
-        theta_edges,
+        transverse_edges,
         phi_edges,
         gamma_plus_smoothed,
         gamma_cross_smoothed,
         overlay_path,
+        transverse_bin=args.transverse_bin,
     )
     print(f'Saved gamma_+ map to {plus_path}')
     print(f'Saved gamma_x map to {cross_path}')
