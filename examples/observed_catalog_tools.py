@@ -96,14 +96,29 @@ def build_distance_to_comoving(h: float = DEFAULT_DESI_H, omega_m: float = DEFAU
 
         return distance_to_comoving, 'cosmoprimo.DESI'
     except Exception:
-        from astropy.cosmology import FlatLambdaCDM
-
-        cosmo = FlatLambdaCDM(H0=100.0 * h, Om0=omega_m)
-
         def distance_to_comoving(redshift: np.ndarray) -> np.ndarray:
-            return np.asarray(cosmo.comoving_distance(redshift).value, dtype=np.float64) * h
+            redshift = np.asarray(redshift, dtype=np.float64)
+            if redshift.size == 0:
+                return redshift.copy()
 
-        return distance_to_comoving, f'FlatLambdaCDM(h={h:.4f}, Om0={omega_m:.4f})'
+            if np.any(redshift < 0.0):
+                raise ValueError('Redshifts must be non-negative')
+
+            max_redshift = float(np.max(redshift))
+            if max_redshift == 0.0:
+                return np.zeros_like(redshift, dtype=np.float64)
+
+            grid_size = max(4096, int(np.ceil(2048 * max_redshift)))
+            z_grid = np.linspace(0.0, max_redshift, grid_size + 1, dtype=np.float64)
+            e_inv = 1.0 / np.sqrt(omega_m * (1.0 + z_grid) ** 3 + (1.0 - omega_m))
+            cumulative = np.empty_like(z_grid)
+            cumulative[0] = 0.0
+            cumulative[1:] = np.cumsum(0.5 * (e_inv[1:] + e_inv[:-1]) * np.diff(z_grid))
+
+            # c / 100 gives comoving distance directly in h^-1 Mpc for H0 = 100 h km/s/Mpc.
+            return np.interp(redshift, z_grid, cumulative) * (299_792.458 / 100.0)
+
+        return distance_to_comoving, f'FlatLambdaCDM-numeric(h={h:.4f}, Om0={omega_m:.4f})'
 
 
 def sky_to_cartesian(ra_deg: np.ndarray, dec_deg: np.ndarray, distance: np.ndarray | float | None = None) -> np.ndarray:
