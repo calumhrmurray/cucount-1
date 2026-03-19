@@ -49,6 +49,7 @@ def load_displacement_shape_results(
         metadata = {
             'normalize_displacement': bool(data['normalize_displacement']) if 'normalize_displacement' in data else False,
             'displacement_units': str(data['displacement_units']) if 'displacement_units' in data else 'arcsec',
+            'east_component_sign': float(data['east_component_sign']) if 'east_component_sign' in data else 1.0,
         }
     return s_edges, mu_edges, components, metadata
 
@@ -239,6 +240,7 @@ def main() -> None:
         smooth_sigma=args.smooth_sigma,
         normalize_displacement=metadata['normalize_displacement'],
         displacement_units=metadata['displacement_units'],
+        east_component_sign=metadata['east_component_sign'],
         **projected_components,
     )
     print(f'Saved projected results to {projected_path}')

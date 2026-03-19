@@ -72,6 +72,13 @@ def normalize_displacements(
     return dalpha_cosdec_arcsec / amplitude, ddec_arcsec / amplitude
 
 
+def apply_east_component_sign(
+    dalpha_cosdec_arcsec: np.ndarray,
+    east_component_sign: float,
+) -> np.ndarray:
+    return east_component_sign * dalpha_cosdec_arcsec
+
+
 def compute_shape_displacement_correlations(
     shape_particles,
     displacement_particles,
@@ -193,6 +200,13 @@ def main() -> None:
     parser.add_argument('--mu-bins', type=int, default=40, help='Number of mu bins over [-1, 1].')
     parser.add_argument('--los', default=DEFAULT_LOS, choices=['midpoint', 'firstpoint', 'endpoint', 'x', 'y', 'z'], help='Line-of-sight definition for mu.')
     parser.add_argument(
+        '--east-component-sign',
+        type=float,
+        default=1.0,
+        choices=(-1.0, 1.0),
+        help='Multiply the eastward displacement component dRA*cos(dec) by this sign before building the spin-1 field.',
+    )
+    parser.add_argument(
         '--normalize-displacement',
         action='store_true',
         help='Normalize each non-zero sky-plane displacement vector to unit length before building the spin-1 field.',
@@ -223,6 +237,7 @@ def main() -> None:
     print(f's bins            : {args.s_bins}')
     print(f'mu bins           : {args.mu_bins}')
     print(f'LOS               : {args.los}')
+    print(f'East comp. sign   : {args.east_component_sign:+.0f}')
     print(f'Displacement mode : {"unit direction vectors" if args.normalize_displacement else "catalog displacement amplitudes"}')
     print(f'Distance model    : {distance_label}')
     print(f'Mesh refine       : {args.mesh_refine:.2f}')
@@ -234,6 +249,7 @@ def main() -> None:
         seed=args.seed,
     )
     data, dalpha_cosdec_arcsec, ddec_arcsec = mask_nonzero_displacements(data, dalpha_cosdec_arcsec, ddec_arcsec)
+    dalpha_cosdec_arcsec = apply_east_component_sign(dalpha_cosdec_arcsec, args.east_component_sign)
     if args.normalize_displacement:
         dalpha_cosdec_arcsec, ddec_arcsec = normalize_displacements(dalpha_cosdec_arcsec, ddec_arcsec)
     print(f'Loaded {data.size:,} displacement tracers with non-zero displacement')
@@ -289,6 +305,7 @@ def main() -> None:
         s_edges=s_edges,
         mu_edges=mu_edges,
         los=args.los,
+        east_component_sign=args.east_component_sign,
         normalize_displacement=args.normalize_displacement,
         displacement_units='unit_vector' if args.normalize_displacement else 'arcsec',
         **correlations,
