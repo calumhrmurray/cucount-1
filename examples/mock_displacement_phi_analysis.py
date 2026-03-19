@@ -13,9 +13,8 @@ Stage assumptions:
 - ``final`` uses the total stored displacement ``Position - POSITION_INITIAL``
   projected at the final sky position.
 
-The current workflow is angular-only, so the notebook's RSD variants are not
-separately run here because they share the same sky coordinates as the
-non-RSD variants.
+When ``--pi-max`` is supplied, the stage-specific real-space redshift columns
+are converted to comoving distance so a line-of-sight cut can be applied.
 """
 
 from __future__ import annotations
@@ -30,15 +29,22 @@ from cucount.numpy import BinAttrs, setup_logging
 
 from displacement_density_phi_map import normalized_density_correlation, plot_xy_map
 from displacement_shape_phi_map import (
+    DEFAULT_PI_LOS,
+    collapse_single_pi_bin,
     compute_shape_maps,
     gaussian_smooth_map,
     plot_single_map,
     plot_smoothed_maps_with_shear_field,
     sample_reference_spin,
 )
-from observed_catalog_tools import CatalogSample, choose_rows, create_particles
+from observed_catalog_tools import CatalogSample, build_distance_to_comoving, choose_rows, create_particles
 
 STAGE_CHOICES = ('initial', 'formation', 'final')
+STAGE_REDSHIFT_COLUMNS = {
+    'initial': 'Z_REAL_INITIAL',
+    'formation': 'Z_REAL_FORMATION',
+    'final': 'Z_REAL_FINAL',
+}
 
 
 def tangent_basis_from_radec(ra_deg: np.ndarray, dec_deg: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -90,6 +96,7 @@ def load_mock_stage(
     seed: int = 0,
 ) -> tuple[CatalogSample, np.ndarray, np.ndarray]:
     stage_upper = stage.upper()
+    redshift_col = STAGE_REDSHIFT_COLUMNS[stage]
     with fits.open(path, memmap=True) as hdul:
         data = hdul[1].data
         indices = choose_rows(len(data), max_rows=max_rows, seed=seed)
@@ -97,6 +104,7 @@ def load_mock_stage(
 
         ra = np.asarray(data[f'RA_{stage_upper}'][row], dtype=np.float64)
         dec = np.asarray(data[f'DEC_{stage_upper}'][row], dtype=np.float64)
+        redshift = np.asarray(data[redshift_col][row], dtype=np.float64)
         weights = np.asarray(data['WEIGHT'][row], dtype=np.float64)
         e1 = np.asarray(data[f'S1_{stage_upper}'][row], dtype=np.float64)
         e2 = np.asarray(data[f'S2_{stage_upper}'][row], dtype=np.float64)
@@ -107,17 +115,20 @@ def load_mock_stage(
     mask = (
         np.isfinite(ra)
         & np.isfinite(dec)
+        & np.isfinite(redshift)
         & np.isfinite(weights)
         & np.isfinite(e1)
         & np.isfinite(e2)
         & np.isfinite(d_north)
         & np.isfinite(d_east)
+        & (redshift > 0.0)
         & (weights > 0.0)
         & (amplitude > 0.0)
     )
     sample = CatalogSample(
         ra=ra[mask],
         dec=dec[mask],
+        z=redshift[mask],
         weights=weights[mask],
         e1=e1[mask],
         e2=e2[mask],
@@ -136,10 +147,11 @@ def load_mock_randoms(
         row = slice(None) if indices is None else indices
         ra = np.asarray(data['RA'][row], dtype=np.float64)
         dec = np.asarray(data['DEC'][row], dtype=np.float64)
+        redshift = np.asarray(data['Z'][row], dtype=np.float64)
         weights = np.asarray(data['WEIGHT'][row], dtype=np.float64)
 
-    mask = np.isfinite(ra) & np.isfinite(dec) & np.isfinite(weights) & (weights > 0.0)
-    return CatalogSample(ra=ra[mask], dec=dec[mask], weights=weights[mask])
+    mask = np.isfinite(ra) & np.isfinite(dec) & np.isfinite(redshift) & np.isfinite(weights) & (redshift > 0.0) & (weights > 0.0)
+    return CatalogSample(ra=ra[mask], dec=dec[mask], z=redshift[mask], weights=weights[mask])
 
 
 def run_stage(
@@ -152,26 +164,54 @@ def run_stage(
     max_data_rows: int | None,
     max_random_rows: int | None,
     seed: int,
+    mesh_refine: float,
     nthreads: int,
     smooth_sigma_theta_bins: float,
     smooth_sigma_phi_bins: float,
+    pi_max: float | None,
+    distance_to_comoving,
 ) -> None:
-    battrs = BinAttrs(theta=theta_edges, phi=phi_edges)
+    pi_edges = None
+    if pi_max is not None:
+        pi_edges = np.array([-pi_max, pi_max], dtype=np.float64)
+        battrs = BinAttrs(theta=theta_edges, phi=phi_edges, pi=(pi_edges, DEFAULT_PI_LOS))
+    else:
+        battrs = BinAttrs(theta=theta_edges, phi=phi_edges)
     sample, d_east, d_north = load_mock_stage(data_path, stage=stage, max_rows=max_data_rows, seed=seed)
     unit_north = d_north / np.hypot(d_north, d_east)
     unit_east = d_east / np.hypot(d_north, d_east)
     randoms = load_mock_randoms(randoms_path, max_rows=max_random_rows, seed=seed + 1000)
     random_north, random_east = sample_reference_spin(unit_north, unit_east, randoms.size, seed=seed + 2000)
+    sample_distance = None if distance_to_comoving is None else distance_to_comoving(sample.z)
+    random_distance = None if distance_to_comoving is None else distance_to_comoving(randoms.z)
 
-    spin_particles = create_particles(sample.ra, sample.dec, sample.weights, spin_values=(d_north, d_east))
-    density_particles = create_particles(sample.ra, sample.dec, sample.weights)
-    random_particles_list = [create_particles(randoms.ra, randoms.dec, randoms.weights)]
+    spin_particles = create_particles(sample.ra, sample.dec, sample.weights, distance=sample_distance, spin_values=(d_north, d_east))
+    density_particles = create_particles(sample.ra, sample.dec, sample.weights, distance=sample_distance)
+    random_particles_list = [create_particles(randoms.ra, randoms.dec, randoms.weights, distance=random_distance)]
 
-    reference_particles = create_particles(sample.ra, sample.dec, sample.weights, spin_values=(unit_north, unit_east))
+    reference_particles = create_particles(
+        sample.ra,
+        sample.dec,
+        sample.weights,
+        distance=sample_distance,
+        spin_values=(unit_north, unit_east),
+    )
     random_reference_particles_list = [
-        create_particles(randoms.ra, randoms.dec, randoms.weights, spin_values=(random_north, random_east))
+        create_particles(
+            randoms.ra,
+            randoms.dec,
+            randoms.weights,
+            distance=random_distance,
+            spin_values=(random_north, random_east),
+        )
     ]
-    shape_particles = create_particles(sample.ra, sample.dec, sample.weights, shear=(sample.e1, sample.e2))
+    shape_particles = create_particles(
+        sample.ra,
+        sample.dec,
+        sample.weights,
+        distance=sample_distance,
+        shear=(sample.e1, sample.e2),
+    )
 
     stage_dir = output_dir / stage
     stage_dir.mkdir(parents=True, exist_ok=True)
@@ -180,6 +220,8 @@ def run_stage(
     print(f'Mock stage: {stage}')
     print(f'  Data rows kept   : {sample.size:,}')
     print(f'  Random rows kept : {randoms.size:,}')
+    if pi_edges is not None:
+        print(f'  Pi cut           : [{pi_edges[0]:.1f}, {pi_edges[1]:.1f}] h^-1 Mpc ({DEFAULT_PI_LOS} LOS)')
 
     xi_density, mean_plus, mean_cross = normalized_density_correlation(
         spin_particles,
@@ -188,15 +230,21 @@ def run_stage(
         battrs=battrs,
         nthreads=nthreads,
     )
+    xi_density = collapse_single_pi_bin(xi_density)
+    mean_plus = collapse_single_pi_bin(mean_plus)
+    mean_cross = collapse_single_pi_bin(mean_cross)
     density_results_path = stage_dir / f'tfc_mock_{stage}_displacement_density_results.npz'
-    np.savez(
-        density_results_path,
-        theta_edges=theta_edges,
-        phi_edges=phi_edges,
-        xi_density=xi_density,
-        mean_plus=mean_plus,
-        mean_cross=mean_cross,
-    )
+    density_payload = {
+        'theta_edges': theta_edges,
+        'phi_edges': phi_edges,
+        'xi_density': xi_density,
+        'mean_plus': mean_plus,
+        'mean_cross': mean_cross,
+    }
+    if pi_edges is not None:
+        density_payload['pi_edges'] = pi_edges
+        density_payload['pi_los'] = DEFAULT_PI_LOS
+    np.savez(density_results_path, **density_payload)
     density_figure_path = stage_dir / f'tfc_mock_{stage}_displacement_density_xy.png'
     plot_xy_map(theta_edges, phi_edges, xi_density, mean_plus, mean_cross, density_figure_path)
     print(f'  Saved density results to {density_results_path}')
@@ -206,23 +254,29 @@ def run_stage(
         random_reference_particles_list,
         shape_particles,
         battrs=battrs,
+        mesh_refine=mesh_refine,
         nthreads=nthreads,
     )
+    gamma_plus = collapse_single_pi_bin(gamma_plus)
+    gamma_cross = collapse_single_pi_bin(gamma_cross)
     gamma_plus_smoothed = gaussian_smooth_map(gamma_plus, smooth_sigma_theta_bins, smooth_sigma_phi_bins)
     gamma_cross_smoothed = gaussian_smooth_map(gamma_cross, smooth_sigma_theta_bins, smooth_sigma_phi_bins)
 
     shape_results_path = stage_dir / f'tfc_mock_{stage}_displacement_shape_results.npz'
-    np.savez(
-        shape_results_path,
-        theta_edges=theta_edges,
-        phi_edges=phi_edges,
-        gamma_plus=gamma_plus,
-        gamma_cross=gamma_cross,
-        gamma_plus_smoothed=gamma_plus_smoothed,
-        gamma_cross_smoothed=gamma_cross_smoothed,
-        smooth_sigma_theta_bins=smooth_sigma_theta_bins,
-        smooth_sigma_phi_bins=smooth_sigma_phi_bins,
-    )
+    shape_payload = {
+        'theta_edges': theta_edges,
+        'phi_edges': phi_edges,
+        'gamma_plus': gamma_plus,
+        'gamma_cross': gamma_cross,
+        'gamma_plus_smoothed': gamma_plus_smoothed,
+        'gamma_cross_smoothed': gamma_cross_smoothed,
+        'smooth_sigma_theta_bins': smooth_sigma_theta_bins,
+        'smooth_sigma_phi_bins': smooth_sigma_phi_bins,
+    }
+    if pi_edges is not None:
+        shape_payload['pi_edges'] = pi_edges
+        shape_payload['pi_los'] = DEFAULT_PI_LOS
+    np.savez(shape_results_path, **shape_payload)
     plus_path = stage_dir / f'tfc_mock_{stage}_displacement_shape_gamma_plus_xy.png'
     cross_path = stage_dir / f'tfc_mock_{stage}_displacement_shape_gamma_cross_xy.png'
     plus_smoothed_path = stage_dir / f'tfc_mock_{stage}_displacement_shape_gamma_plus_xy_smoothed.png'
@@ -276,11 +330,13 @@ def main() -> None:
     parser.add_argument('--max-theta', type=float, default=2.0, help='Maximum theta in degrees.')
     parser.add_argument('--theta-bins', type=int, default=32, help='Number of theta bins.')
     parser.add_argument('--phi-bins', type=int, default=72, help='Number of phi bins over [0, 360) degrees.')
+    parser.add_argument('--pi-max', type=float, default=None, help='If set, keep only pairs with |pi| <= this value in h^-1 Mpc using the first-point LOS.')
     parser.add_argument('--max-data-rows', type=int, default=None, help='Optional cap on mock-galaxy rows.')
     parser.add_argument('--max-random-rows', type=int, default=None, help='Optional cap on random rows.')
     parser.add_argument('--smooth-sigma-theta-bins', type=float, default=1.0)
     parser.add_argument('--smooth-sigma-phi-bins', type=float, default=1.0)
     parser.add_argument('--seed', type=int, default=1234)
+    parser.add_argument('--mesh-refine', type=float, default=5.0, help='Mesh refinement factor passed to cucount MeshAttrs.')
     parser.add_argument('--nthreads', type=int, default=1)
     parser.add_argument('--log-level', default='info', choices=['debug', 'info', 'warning', 'error'])
     args = parser.parse_args()
@@ -291,6 +347,10 @@ def main() -> None:
 
     theta_edges = np.linspace(args.min_theta, args.max_theta, args.theta_bins + 1)
     phi_edges = np.linspace(0.0, 360.0, args.phi_bins + 1)
+    distance_to_comoving = None
+    distance_label = None
+    if args.pi_max is not None:
+        distance_to_comoving, distance_label = build_distance_to_comoving()
 
     print('=' * 72)
     print('Mock displacement x density / shape phi-analysis')
@@ -298,6 +358,10 @@ def main() -> None:
     print(f'Mock data        : {args.data}')
     print(f'Mock randoms     : {args.randoms}')
     print(f'Stages           : {", ".join(args.stages)}')
+    if args.pi_max is not None:
+        print(f'Pi cut           : [-{args.pi_max:.1f}, {args.pi_max:.1f}] h^-1 Mpc ({DEFAULT_PI_LOS} LOS)')
+        print(f'Distance model   : {distance_label}')
+    print(f'Mesh refine      : {args.mesh_refine:.2f}')
     print('Displacement use : initial/final use total displacement; formation uses formation-initial displacement')
     print('=' * 72)
 
@@ -312,9 +376,12 @@ def main() -> None:
             max_data_rows=args.max_data_rows,
             max_random_rows=args.max_random_rows,
             seed=args.seed + 10 * istage,
+            mesh_refine=args.mesh_refine,
             nthreads=args.nthreads,
             smooth_sigma_theta_bins=args.smooth_sigma_theta_bins,
             smooth_sigma_phi_bins=args.smooth_sigma_phi_bins,
+            pi_max=args.pi_max,
+            distance_to_comoving=distance_to_comoving,
         )
 
 

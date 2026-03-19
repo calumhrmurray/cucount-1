@@ -218,6 +218,7 @@ def load_unions_catalog(
     weight_col: str = 'auto',
     e1_col: str = 'e1',
     e2_col: str = 'e2',
+    z_col: str | None = None,
 ) -> CatalogSample:
     with fits.open(path, memmap=True) as hdul:
         data = hdul[1].data
@@ -225,6 +226,15 @@ def load_unions_catalog(
         dec_col = 'Dec' if 'Dec' in columns else 'DEC'
         if weight_col == 'auto':
             weight_col = 'w_des' if 'w_des' in columns else 'w'
+        if z_col == 'auto':
+            for candidate in ('redshift', 'Z', 'z'):
+                if candidate in columns:
+                    z_col = candidate
+                    break
+            else:
+                z_col = None
+        if (z_col is not None) and (z_col not in columns):
+            raise KeyError(f'Column {z_col!r} was not found in {path}')
         indices = choose_rows(len(data), max_rows=max_rows, seed=seed)
         row = slice(None) if indices is None else indices
         ra = np.asarray(data['RA'][row], dtype=np.float64)
@@ -232,6 +242,7 @@ def load_unions_catalog(
         e1 = np.asarray(data[e1_col][row], dtype=np.float64)
         e2 = np.asarray(data[e2_col][row], dtype=np.float64)
         weights = np.asarray(data[weight_col][row], dtype=np.float64)
+        redshift = None if z_col is None else np.asarray(data[z_col][row], dtype=np.float64)
 
     mask = (
         np.isfinite(ra)
@@ -241,4 +252,13 @@ def load_unions_catalog(
         & np.isfinite(weights)
         & (weights > 0.0)
     )
-    return CatalogSample(ra=ra[mask], dec=dec[mask], e1=e1[mask], e2=e2[mask], weights=weights[mask])
+    if redshift is not None:
+        mask &= np.isfinite(redshift) & (redshift > 0.0)
+    return CatalogSample(
+        ra=ra[mask],
+        dec=dec[mask],
+        z=None if redshift is None else redshift[mask],
+        e1=e1[mask],
+        e2=e2[mask],
+        weights=weights[mask],
+    )

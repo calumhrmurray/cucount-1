@@ -24,13 +24,14 @@ import matplotlib.pyplot as plt
 from matplotlib.collections import LineCollection
 import numpy as np
 
-from cucount.numpy import BinAttrs, WeightAttrs, count2, setup_logging
+from cucount.numpy import BinAttrs, MeshAttrs, WeightAttrs, count2, setup_logging
 
 from observed_catalog_tools import (
     DEFAULT_DESI_LRG_SHAPES,
     DEFAULT_DESI_RANDOMS_GLOB,
     DEFAULT_DISPLACEMENT_DATA,
     CatalogSample,
+    build_distance_to_comoving,
     create_particles,
     load_desi_catalog,
     load_displacement_catalog,
@@ -38,6 +39,8 @@ from observed_catalog_tools import (
     resolve_random_catalogs,
     safe_divide,
 )
+
+DEFAULT_PI_LOS = 'firstpoint'
 
 
 def gaussian_kernel1d(sigma_bins: float, truncate: float = 3.0) -> np.ndarray:
@@ -131,11 +134,13 @@ def compute_shape_maps(
     random_reference_particles_list,
     shape_particles,
     battrs: BinAttrs,
+    mesh_refine: float,
     nthreads: int,
 ) -> tuple[np.ndarray, np.ndarray]:
     spin_wattrs = WeightAttrs(spin=(1, 2), reference_only=(True, False))
+    ds_mattrs = MeshAttrs(reference_particles, shape_particles, battrs=battrs, refine=mesh_refine)
 
-    ds_spin = count2(reference_particles, shape_particles, battrs=battrs, wattrs=spin_wattrs, nthreads=nthreads)
+    ds_spin = count2(reference_particles, shape_particles, battrs=battrs, wattrs=spin_wattrs, mattrs=ds_mattrs, nthreads=nthreads)
     ds_pairs = ds_spin['weight']
     ds_plus = safe_divide(ds_spin['weight_plus'], ds_pairs)
     ds_cross = safe_divide(ds_spin['weight_cross'], ds_pairs)
@@ -143,7 +148,8 @@ def compute_shape_maps(
     rs_plus_sum = np.zeros_like(ds_plus, dtype=np.float64)
     rs_cross_sum = np.zeros_like(ds_cross, dtype=np.float64)
     for random_reference_particles in random_reference_particles_list:
-        rs_spin = count2(random_reference_particles, shape_particles, battrs=battrs, wattrs=spin_wattrs, nthreads=nthreads)
+        rs_mattrs = MeshAttrs(random_reference_particles, shape_particles, battrs=battrs, refine=mesh_refine)
+        rs_spin = count2(random_reference_particles, shape_particles, battrs=battrs, wattrs=spin_wattrs, mattrs=rs_mattrs, nthreads=nthreads)
         rs_pairs = rs_spin['weight']
         rs_plus_sum += safe_divide(rs_spin['weight_plus'], rs_pairs)
         rs_cross_sum += safe_divide(rs_spin['weight_cross'], rs_pairs)
@@ -151,6 +157,15 @@ def compute_shape_maps(
     rs_plus = rs_plus_sum / len(random_reference_particles_list)
     rs_cross = rs_cross_sum / len(random_reference_particles_list)
     return ds_plus - rs_plus, ds_cross - rs_cross
+
+
+def collapse_single_pi_bin(values: np.ndarray) -> np.ndarray:
+    values = np.asarray(values, dtype=np.float64)
+    if values.ndim == 2:
+        return values
+    if (values.ndim == 3) and (values.shape[-1] == 1):
+        return values[..., 0]
+    raise ValueError(f'Expected a 2D map or a single pi bin, got shape {values.shape}')
 
 
 def plot_single_map(
@@ -322,12 +337,14 @@ def main() -> None:
     parser.add_argument('--shape-weight-col', default='auto', help='Shape-catalog weight column to use, or auto.')
     parser.add_argument('--shape-e1-col', default='e1', help='Shape-catalog e1 column.')
     parser.add_argument('--shape-e2-col', default='e2', help='Shape-catalog e2 column.')
+    parser.add_argument('--shape-z-col', default='auto', help='Shape-catalog redshift column to use when --pi-max is set, or auto.')
     parser.add_argument('--output-dir', default='examples/output/displacement_shape_phi', help='Directory for outputs.')
     parser.add_argument('--output-prefix', default='desi_lrg_displacement_shape', help='Output file prefix.')
     parser.add_argument('--min-theta', type=float, default=0.05, help='Minimum theta in degrees.')
     parser.add_argument('--max-theta', type=float, default=2.0, help='Maximum theta in degrees.')
     parser.add_argument('--theta-bins', type=int, default=32, help='Number of theta bins.')
     parser.add_argument('--phi-bins', type=int, default=72, help='Number of phi bins over [0, 360) degrees.')
+    parser.add_argument('--pi-max', type=float, default=None, help='If set, keep only pairs with |pi| <= this value in h^-1 Mpc using the first-point LOS.')
     parser.add_argument('--max-data-rows', type=int, default=None, help='Optional cap on displacement-catalog rows.')
     parser.add_argument('--max-shape-rows', type=int, default=None, help='Optional cap on shape-catalog rows.')
     parser.add_argument('--max-random-files', type=int, default=4, help='Optional cap on random files.')
@@ -345,6 +362,7 @@ def main() -> None:
         help='Gaussian smoothing sigma along phi, in units of phi bins.',
     )
     parser.add_argument('--seed', type=int, default=1234, help='Seed for reproducible sub-sampling.')
+    parser.add_argument('--mesh-refine', type=float, default=5.0, help='Mesh refinement factor passed to cucount MeshAttrs.')
     parser.add_argument('--nthreads', type=int, default=1, help='Number of GPUs for cucount to use.')
     parser.add_argument('--log-level', default='info', choices=['debug', 'info', 'warning', 'error'])
     args = parser.parse_args()
@@ -355,7 +373,15 @@ def main() -> None:
 
     theta_edges = np.linspace(args.min_theta, args.max_theta, args.theta_bins + 1)
     phi_edges = np.linspace(0.0, 360.0, args.phi_bins + 1)
-    battrs = BinAttrs(theta=theta_edges, phi=phi_edges)
+    pi_edges = None
+    distance_to_comoving = None
+    distance_label = None
+    if args.pi_max is not None:
+        pi_edges = np.array([-args.pi_max, args.pi_max], dtype=np.float64)
+        battrs = BinAttrs(theta=theta_edges, phi=phi_edges, pi=(pi_edges, DEFAULT_PI_LOS))
+        distance_to_comoving, distance_label = build_distance_to_comoving()
+    else:
+        battrs = BinAttrs(theta=theta_edges, phi=phi_edges)
 
     print('=' * 72)
     print('Displacement-shape correlation in displacement-aligned coordinates')
@@ -366,6 +392,10 @@ def main() -> None:
     print(f'Theta range       : [{args.min_theta:.3f}, {args.max_theta:.3f}] deg')
     print(f'Theta bins        : {args.theta_bins}')
     print(f'Phi bins          : {args.phi_bins}')
+    if pi_edges is not None:
+        print(f'Pi cut            : [{pi_edges[0]:.1f}, {pi_edges[1]:.1f}] h^-1 Mpc ({DEFAULT_PI_LOS} LOS)')
+        print(f'Distance model    : {distance_label}')
+    print(f'Mesh refine       : {args.mesh_refine:.2f}')
     print(f'Smoothing sigma   : theta={args.smooth_sigma_theta_bins:.2f} bins, phi={args.smooth_sigma_phi_bins:.2f} bins')
     print('=' * 72)
 
@@ -385,23 +415,47 @@ def main() -> None:
         weight_col=args.shape_weight_col,
         e1_col=args.shape_e1_col,
         e2_col=args.shape_e2_col,
+        z_col=args.shape_z_col if args.pi_max is not None else None,
     )
     print(f'Loaded {shapes.size:,} shape tracers')
+
+    if args.pi_max is not None:
+        if (data.z is None) or (shapes.z is None):
+            raise ValueError('The pi cut requires redshift columns for both the displacement and shape catalogs')
+        data_distance = distance_to_comoving(data.z)
+        shape_distance = distance_to_comoving(shapes.z)
+    else:
+        data_distance = None
+        shape_distance = None
 
     reference_particles = create_particles(
         data.ra,
         data.dec,
         data.weights,
+        distance=data_distance,
         spin_values=(unit_north, unit_east),
     )
-    shape_particles = create_particles(shapes.ra, shapes.dec, shapes.weights, shear=(shapes.e1, shapes.e2))
+    shape_particles = create_particles(
+        shapes.ra,
+        shapes.dec,
+        shapes.weights,
+        distance=shape_distance,
+        shear=(shapes.e1, shapes.e2),
+    )
     random_paths = resolve_random_catalogs(args.randoms_glob, max_files=args.max_random_files)
     random_reference_particles_list = []
     for index, random_path in enumerate(random_paths, start=1):
         randoms = load_desi_catalog(random_path, max_rows=args.max_random_rows, seed=args.seed + index)
+        random_distance = None if args.pi_max is None else distance_to_comoving(randoms.z)
         rand_north, rand_east = sample_reference_spin(unit_north, unit_east, randoms.size, seed=args.seed + 10_000 + index)
         random_reference_particles_list.append(
-            create_particles(randoms.ra, randoms.dec, randoms.weights, spin_values=(rand_north, rand_east))
+            create_particles(
+                randoms.ra,
+                randoms.dec,
+                randoms.weights,
+                distance=random_distance,
+                spin_values=(rand_north, rand_east),
+            )
         )
     print(f'Loaded {len(random_reference_particles_list)} random catalogs with sampled displacement directions')
 
@@ -410,23 +464,29 @@ def main() -> None:
         random_reference_particles_list,
         shape_particles,
         battrs=battrs,
+        mesh_refine=args.mesh_refine,
         nthreads=args.nthreads,
     )
+    gamma_plus = collapse_single_pi_bin(gamma_plus)
+    gamma_cross = collapse_single_pi_bin(gamma_cross)
     gamma_plus_smoothed = gaussian_smooth_map(gamma_plus, args.smooth_sigma_theta_bins, args.smooth_sigma_phi_bins)
     gamma_cross_smoothed = gaussian_smooth_map(gamma_cross, args.smooth_sigma_theta_bins, args.smooth_sigma_phi_bins)
 
     results_path = output_dir / f'{args.output_prefix}_results.npz'
-    np.savez(
-        results_path,
-        theta_edges=theta_edges,
-        phi_edges=phi_edges,
-        gamma_plus=gamma_plus,
-        gamma_cross=gamma_cross,
-        gamma_plus_smoothed=gamma_plus_smoothed,
-        gamma_cross_smoothed=gamma_cross_smoothed,
-        smooth_sigma_theta_bins=args.smooth_sigma_theta_bins,
-        smooth_sigma_phi_bins=args.smooth_sigma_phi_bins,
-    )
+    results_payload = {
+        'theta_edges': theta_edges,
+        'phi_edges': phi_edges,
+        'gamma_plus': gamma_plus,
+        'gamma_cross': gamma_cross,
+        'gamma_plus_smoothed': gamma_plus_smoothed,
+        'gamma_cross_smoothed': gamma_cross_smoothed,
+        'smooth_sigma_theta_bins': args.smooth_sigma_theta_bins,
+        'smooth_sigma_phi_bins': args.smooth_sigma_phi_bins,
+    }
+    if pi_edges is not None:
+        results_payload['pi_edges'] = pi_edges
+        results_payload['pi_los'] = DEFAULT_PI_LOS
+    np.savez(results_path, **results_payload)
     print(f'Saved results to {results_path}')
 
     plus_path = output_dir / f'{args.output_prefix}_gamma_plus_xy.png'
