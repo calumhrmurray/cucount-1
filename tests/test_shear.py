@@ -105,6 +105,9 @@ def test(backend='numpy', write=False):
     particles = [create_cucount_particles(catalog, with_spin=True) for catalog in catalogs]
     wattrs = WeightAttrs(spin=(2, 2))
     counts = count2(*particles, battrs=battrs, wattrs=wattrs)
+    assert 'weight_cross_plus' in counts
+    assert 'weight_first_cross_second_plus' in counts
+    assert 'weight_first_plus_second_cross' in counts
     counts_ref = counts = np.column_stack([counts['weight_plus_plus'], counts['weight_plus_cross'], counts['weight_cross_cross']])
     fn = dirname / 'counts_ss.txt'
     if write: np.savetxt(fn, counts)

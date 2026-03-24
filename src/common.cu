@@ -36,7 +36,7 @@ size_t get_count2_size(IndexValue index_value1, IndexValue index_value2, WeightA
     int s1 = (index_value1.size_spin > 0) && !wattrs.reference_only[0];
     int s2 = (index_value2.size_spin > 0) && !wattrs.reference_only[1];
     size_t n = 1;
-    if (s1 && s2) n = 4;
+    if (s1 && s2) n = 5;
     else if (s1 ^ s2) n = 3;
 
     if (names == NULL) {
@@ -51,8 +51,12 @@ size_t get_count2_size(IndexValue index_value1, IndexValue index_value2, WeightA
     if (s1 && s2) {
         strncpy(names[0], "weight", SIZE_NAME-1);
         strncpy(names[1], "weight_plus_plus", SIZE_NAME-1);
+        // Preserve the legacy mixed-term key for backward compatibility:
+        // weight_plus_cross stores first-cross x second-plus.
         strncpy(names[2], "weight_plus_cross", SIZE_NAME-1);
-        strncpy(names[3], "weight_cross_cross", SIZE_NAME-1);
+        // New explicit mixed term: first-plus x second-cross.
+        strncpy(names[3], "weight_cross_plus", SIZE_NAME-1);
+        strncpy(names[4], "weight_cross_cross", SIZE_NAME-1);
     } else if (s1 ^ s2) {
         strncpy(names[0], "weight", SIZE_NAME-1);
         strncpy(names[1], "weight_plus", SIZE_NAME-1);

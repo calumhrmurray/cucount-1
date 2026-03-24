@@ -502,11 +502,15 @@ __device__ inline void add_weight(FLOAT *counts, FLOAT *sposition1, FLOAT *sposi
     if (output_spin2) compute_spin_projection_cartesian(sposition1, sposition2, &(value2[index_value2.start_spin]), wattrs.spin[1], &splus2, &scross2);
 
     if (output_spin1 && output_spin2) {
-        wsize = 4;
+        wsize = 5;
         weight[0] = pair_weight;
         weight[1] = pair_weight * splus1 * splus2;
+        // Preserve the legacy mixed-term slot for backward compatibility:
+        // weight_plus_cross = first-cross x second-plus.
         weight[2] = pair_weight * scross1 * splus2;
-        weight[3] = pair_weight * scross1 * scross2;
+        // New mixed term with the complementary ordering.
+        weight[3] = pair_weight * splus1 * scross2;
+        weight[4] = pair_weight * scross1 * scross2;
     }
     else if (output_spin1) {
         wsize = 3;

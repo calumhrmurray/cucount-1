@@ -63,7 +63,7 @@ typedef struct {
 } IndexValue;
 
 
-#define MAX_NWEIGHT 4
+#define MAX_NWEIGHT 5
 #define SIZE_NAME 32
 
 typedef struct {

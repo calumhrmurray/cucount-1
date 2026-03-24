@@ -179,7 +179,8 @@ def _count2_no_shard(*particles: Particles, mattrs: MeshAttrs, battrs: BinAttrs,
 
     args = sum(([particle.positions, _concatenate_values(particle.values, np=jnp)] for particle in particles), start=[])
     counts = call(*args)[0]
-    return {name: counts[icount * bsize:(icount + 1) * bsize].reshape(bshape) for icount, name in enumerate(names)}
+    result = {name: counts[icount * bsize:(icount + 1) * bsize].reshape(bshape) for icount, name in enumerate(names)}
+    return numpy._with_spin_spin_aliases(result)
 
 
 @default_sharding_mesh
