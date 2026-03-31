@@ -185,7 +185,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         '--samples',
         nargs='+',
-        default=['BGS', 'LRG', 'CMASS', 'ELG'],
+        default=['CMASS', 'ELG'],
         choices=list(DEFAULT_SAMPLE_SPECS),
         help='Lens samples to measure.',
     )
