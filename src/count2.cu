@@ -190,6 +190,11 @@ __device__ inline void compute_local_tangent_basis(const FLOAT *r1, FLOAT *east,
     north[0] = r1[1] * east[2] - r1[2] * east[1];
     north[1] = r1[2] * east[0] - r1[0] * east[2];
     north[2] = r1[0] * east[1] - r1[1] * east[0];
+    // r1 is a full 3D position (not a unit vector), so |north| = |r1| here;
+    // normalise so atan2(p.east, p.north) in compute_pair_angle_cartesian is
+    // not squashed toward the north axis by the |r1| scale factor.
+    FLOAT north_norm = 1.0 / sqrt(north[0] * north[0] + north[1] * north[1] + north[2] * north[2]);
+    north[0] *= north_norm; north[1] *= north_norm; north[2] *= north_norm;
 }
 
 
